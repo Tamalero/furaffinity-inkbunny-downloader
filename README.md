@@ -40,10 +40,16 @@ Or double-click it in your file manager if your desktop environment supports App
 ```bash
 git clone https://github.com/Tamalero/furaffinity-inkbunny-downloader.git
 cd furaffinity-inkbunny-downloader
-./run.fish
 ```
 
-`run.fish` creates a virtual environment, installs all dependencies, and launches the app.
+Then launch with whichever shell you use:
+
+| Shell | Command |
+|---|---|
+| Bash / Zsh / sh | `./run.sh` |
+| Fish | `./run.fish` |
+
+Both launchers do the same thing: create a Python virtual environment if one does not exist, install or update all dependencies from `requirements.txt`, download the Camoufox browser on first run, and start the app.
 
 ---
 
