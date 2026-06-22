@@ -1,0 +1,7 @@
+requests
+PyQt6
+cryptography
+beautifulsoup4
+lxml
+playwright
+camoufox

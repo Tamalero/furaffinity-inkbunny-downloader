@@ -1,0 +1,20 @@
+# Virtual environment
+venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Downloaded artwork output
+FAIBDownload/
+
+# Claude Code local settings
+.claude/
+
+# Credentials / session data (stored in ~/.config/faibdownloader/ at runtime,
+# but gitignore them here as a safety net if the config path is ever changed)
+*.key
+fa_cookies.json
+config.ini
