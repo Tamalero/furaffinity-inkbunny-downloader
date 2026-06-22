@@ -459,6 +459,14 @@ def fa_get_download_info(
                 dl_url = href
                 break
     if not dl_url:
+        # Video / Flash submissions: check <video src>, <source src>, or <a href> with
+        # a media extension — covers FA's HTML5 player where no separate download link exists.
+        for tag in soup.find_all(["video", "source"], src=True):
+            src = tag["src"]
+            if src:
+                dl_url = src
+                break
+    if not dl_url:
         for img in (
             soup.find("img", id="submissionImg"),
             soup.find("img", class_=re.compile(r"submission-image")),

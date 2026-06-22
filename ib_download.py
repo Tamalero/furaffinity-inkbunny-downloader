@@ -185,15 +185,19 @@ def ib_get_file_infos(sid: str, submission_ids: list[str], log_fn=print) -> list
             title    = sub.get("title", sub_id)
             username = sub.get("username", "unknown")
             for f in sub.get("files", []):
-                url = f.get("file_url_full") or f.get("file_url_screen") or ""
-                if url:
-                    results.append({
-                        "url":           url,
-                        "filename":      f.get("file_name", ""),
-                        "title":         title,
-                        "username":      username,
-                        "submission_id": sub_id,
-                    })
+                url = f.get("file_url_full") or ""
+                if not url:
+                    # file_url_screen is a thumbnail/preview image for video and audio
+                    # submissions — never use it as a fallback for the actual file.
+                    log_fn(f"  Warning: submission {sub_id} has no file_url_full — skipping file.")
+                    continue
+                results.append({
+                    "url":           url,
+                    "filename":      f.get("file_name", ""),
+                    "title":         title,
+                    "username":      username,
+                    "submission_id": sub_id,
+                })
         time.sleep(0.3)
 
     return results

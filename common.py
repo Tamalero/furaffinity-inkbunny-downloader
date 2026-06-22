@@ -153,8 +153,10 @@ def _stream_download(
     session: "requests.Session | None" = None,
     fprog_fn=None,
 ) -> int:
-    """Stream-download url → dest. Returns bytes written."""
-    kwargs: dict = dict(stream=True, timeout=60)
+    """Stream-download url → dest. Returns bytes written.
+    Writes to a .part file and renames atomically on success so a failed
+    download never leaves a corrupt file that would be mistaken for complete."""
+    kwargs: dict = dict(stream=True, timeout=120)
     r = session.get(url, **kwargs) if session else requests.get(url, headers=_random_headers(), **kwargs)
     r.raise_for_status()
 
@@ -163,12 +165,21 @@ def _stream_download(
     if fprog_fn:
         fprog_fn(fname, 0, total)
 
-    written = 0
-    with open(dest, "wb") as fh:
-        for chunk in r.iter_content(chunk_size=65536):
-            if chunk:
-                fh.write(chunk)
-                written += len(chunk)
-                if fprog_fn:
-                    fprog_fn(fname, written, total)
+    tmp = dest + ".part"
+    try:
+        written = 0
+        with open(tmp, "wb") as fh:
+            for chunk in r.iter_content(chunk_size=65536):
+                if chunk:
+                    fh.write(chunk)
+                    written += len(chunk)
+                    if fprog_fn:
+                        fprog_fn(fname, written, total)
+        os.replace(tmp, dest)   # atomic on POSIX; overwrites dest if it exists
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return written
