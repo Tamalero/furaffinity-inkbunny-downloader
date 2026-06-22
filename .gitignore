@@ -18,3 +18,12 @@ FAIBDownload/
 *.key
 fa_cookies.json
 config.ini
+
+# AppImage build artifacts
+dist/
+build/
+AppDir/
+*.AppImage
+*.AppImage.zsync
+faib-downloader.png
+.build-tools/

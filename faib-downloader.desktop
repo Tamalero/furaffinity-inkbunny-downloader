@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FA & Inkbunny Downloader
+GenericName=Gallery Downloader
+Comment=Download galleries and favourites from FurAffinity and Inkbunny
+Exec=faib-downloader
+Icon=faib-downloader
+Categories=Network;FileTransfer;
+Terminal=false
+StartupNotify=true
+Keywords=furaffinity;inkbunny;gallery;download;furry;

@@ -1,0 +1,83 @@
+name: Build and Release AppImage
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Install system packages
+        run: sudo apt-get install -y zsync libfuse2
+
+      - name: Stamp version into common.py
+        run: sed -i "s/^VERSION = .*/VERSION = \"${VERSION}\"/" common.py
+
+      - name: Generate icon
+        run: python3 create_icon.py
+
+      - name: Build with PyInstaller
+        run: python3 -m PyInstaller --clean --noconfirm faib-downloader.spec
+
+      - name: Download appimagetool
+        run: |
+          curl -Lo appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+
+      - name: Assemble AppDir
+        run: |
+          rm -rf AppDir && mkdir -p AppDir
+          cp -r dist/faib-downloader/. AppDir/
+          cp AppRun                    AppDir/AppRun
+          cp faib-downloader.desktop   AppDir/faib-downloader.desktop
+          cp faib-downloader.png       AppDir/faib-downloader.png
+          ln -sf faib-downloader.png   AppDir/.DirIcon
+          chmod +x AppDir/AppRun
+
+      - name: Build AppImage
+        run: |
+          ARCH=x86_64 ./appimagetool \
+            --updateinformation \
+            "gh-releases-zsync|Tamalero|furaffinity-inkbunny-downloader|latest|FurAffinityInkbunnyDownloader-*-x86_64.AppImage.zsync" \
+            AppDir \
+            "FurAffinityInkbunnyDownloader-${VERSION}-x86_64.AppImage"
+
+      - name: Generate .zsync
+        run: |
+          zsyncmake \
+            -C "FurAffinityInkbunnyDownloader-${VERSION}-x86_64.AppImage" \
+            -u "FurAffinityInkbunnyDownloader-${VERSION}-x86_64.AppImage" \
+            -o "FurAffinityInkbunnyDownloader-${VERSION}-x86_64.AppImage.zsync"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ env.VERSION }}"
+          generate_release_notes: true
+          files: |
+            FurAffinityInkbunnyDownloader-${{ env.VERSION }}-x86_64.AppImage
+            FurAffinityInkbunnyDownloader-${{ env.VERSION }}-x86_64.AppImage.zsync

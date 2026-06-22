@@ -216,6 +216,31 @@ class DownloadWorker(QThread):
             self.done.emit(True, f"Done — {n} files · {size_str}")
 
 
+# ── Background helpers ─────────────────────────────────────────────────────────
+
+class _UpdateChecker(QThread):
+    """Checks GitHub releases for a newer version. Runs once at startup."""
+    update_found = pyqtSignal(str)   # emits latest version string
+
+    def run(self):
+        available, latest = common.check_for_updates()
+        if available:
+            self.update_found.emit(latest)
+
+
+class _CamoufoxSetup(QThread):
+    """Downloads the Camoufox browser binary in the background."""
+    finished = pyqtSignal(bool, str)   # (success, error_message)
+
+    def run(self):
+        try:
+            from camoufox.pkgman import camoufox_path
+            camoufox_path(download_if_missing=True)
+            self.finished.emit(True, "")
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+
 # ── Main window ────────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -231,11 +256,21 @@ class MainWindow(QMainWindow):
         self._load_saved_credentials()
         self._load_ui_state()
 
+        self._update_checker = _UpdateChecker()
+        self._update_checker.update_found.connect(self._on_update_available)
+        self._update_checker.start()
+
     # ── UI construction ────────────────────────────────────────────────────────
 
     def _build_ui(self):
         mb        = self.menuBar()
         help_menu = mb.addMenu("&Help")
+        help_menu.addAction("Setup Camoufox Browser…").triggered.connect(self._setup_camoufox)
+        help_menu.addSeparator()
+        help_menu.addAction("Check for Updates").triggered.connect(self._check_updates_manual)
+        self._act_update_available = help_menu.addAction("")
+        self._act_update_available.triggered.connect(self._open_releases)
+        self._act_update_available.setVisible(False)
         help_menu.addSeparator()
         help_menu.addAction(f"Version {common.VERSION}").setEnabled(False)
 
@@ -514,6 +549,57 @@ class MainWindow(QMainWindow):
         if total > 0:
             pw = int(total * preview_ratio)
             self._bottom_splitter.setSizes([pw, total - pw])
+
+    # ── Update / Camoufox helpers ──────────────────────────────────────────────
+
+    def _on_update_available(self, latest: str):
+        self._act_update_available.setText(f"Update available: v{latest} — open releases…")
+        self._act_update_available.setVisible(True)
+        self.statusbar.showMessage(
+            f"Update available: v{latest} — see Help menu.", 12000
+        )
+
+    def _check_updates_manual(self):
+        self.statusbar.showMessage("Checking for updates…")
+        available, latest = common.check_for_updates()
+        if available:
+            self._on_update_available(latest)
+            QMessageBox.information(
+                self, "Update Available",
+                f"Version v{latest} is available on GitHub.\nYou are running v{common.VERSION}.",
+            )
+        else:
+            self.statusbar.showMessage("You are up to date.", 5000)
+            QMessageBox.information(
+                self, "Up to Date",
+                f"You are running the latest version (v{common.VERSION}).",
+            )
+
+    def _open_releases(self):
+        import webbrowser
+        webbrowser.open(common.GITHUB_RELEASES_URL)
+
+    def _setup_camoufox(self):
+        reply = QMessageBox.question(
+            self, "Setup Camoufox",
+            "Download the Camoufox browser required for FurAffinity login (~100 MB).\n"
+            "This is a one-time setup stored in your home directory.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.statusbar.showMessage("Downloading Camoufox browser… (may take a few minutes)")
+        self._camoufox_setup = _CamoufoxSetup()
+        self._camoufox_setup.finished.connect(self._on_camoufox_setup_done)
+        self._camoufox_setup.start()
+
+    def _on_camoufox_setup_done(self, ok: bool, err: str):
+        if ok:
+            self.statusbar.showMessage("Camoufox browser ready.", 6000)
+            QMessageBox.information(self, "Camoufox Ready", "Camoufox browser installed successfully.")
+        else:
+            self.statusbar.showMessage("Camoufox setup failed.", 6000)
+            QMessageBox.critical(self, "Setup Failed", f"Could not install Camoufox:\n{err}")
 
     # ── Slots ──────────────────────────────────────────────────────────────────
 

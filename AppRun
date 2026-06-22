@@ -1,0 +1,5 @@
+#!/bin/bash
+# AppImage entry point — launches the PyInstaller-frozen binary.
+SELF="$(readlink -f "$0")"
+HERE="${SELF%/*}"
+exec "${HERE}/faib-downloader" "$@"

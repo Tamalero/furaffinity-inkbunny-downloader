@@ -8,6 +8,8 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 
 VERSION = "1.0.0"
+GITHUB_REPO = "Tamalero/furaffinity-inkbunny-downloader"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
 # ── XDG config paths ───────────────────────────────────────────────────────────
 _cfg_home            = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -115,6 +117,32 @@ def save_ui_state(state: dict):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w") as fh:
         cfg.write(fh)
+
+
+# ── Update check ───────────────────────────────────────────────────────────────
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.split(".") if x.isdigit())
+
+
+def check_for_updates() -> tuple[bool, str]:
+    """Query GitHub releases API for a newer version. Returns (available, latest_tag).
+    Silently returns (False, '') on any network or parse error."""
+    try:
+        import urllib.request
+        import json
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": f"faib-downloader/{VERSION}"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        tag = data.get("tag_name", "").lstrip("v")
+        if not tag:
+            return False, ""
+        return _version_tuple(tag) > _version_tuple(VERSION), tag
+    except Exception:
+        return False, ""
 
 
 # ── Download primitive ─────────────────────────────────────────────────────────
