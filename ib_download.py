@@ -19,11 +19,13 @@ _IB_TEXT_TYPES = {"story", "poetry", "prose"}
 _TEXT_EXTENSIONS = {"txt", "doc", "docx", "rtf", "odt", "pdf", "epub", "html", "htm", "md"}
 
 
-def ib_login(username: str, password: str) -> tuple[str, "requests.Session"]:
+def ib_login(username: str, password: str) -> tuple[str, str, "requests.Session"]:
     """
     Log in to the Inkbunny API.
-    Returns (sid, session) where sid is the API session ID and session is a
-    requests.Session carrying the PHP cookie for web-page access.
+    Returns (sid, user_id, session) where:
+      sid     — API session token (passed to all API calls)
+      user_id — numeric user ID string (used for web page scraping)
+      session — requests.Session carrying the PHP cookie for web-page access
     Raises ValueError on failure.
     """
     session = requests.Session()
@@ -40,7 +42,8 @@ def ib_login(username: str, password: str) -> tuple[str, "requests.Session"]:
     sid = data.get("sid")
     if not sid:
         raise ValueError("Inkbunny login failed — no session ID returned.")
-    return sid, session
+    user_id = str(data.get("user_id", ""))
+    return sid, user_id, session
 
 
 def ib_fetch_submission_ids(
@@ -51,14 +54,18 @@ def ib_fetch_submission_ids(
     log_fn=print,
     cancel_fn=None,
 ) -> list[str]:
-    """Paginate the Inkbunny search API. Returns a flat list of submission IDs."""
+    """
+    Paginate the Inkbunny search API for gallery or (other-user) favourites.
+    For your OWN favourites use ib_fetch_favourite_ids instead — it uses the
+    web endpoint that exactly matches the browser and orders by fav_datetime.
+    Returns a flat list of submission IDs.
+    """
     all_ids: list[str] = []
     page = 1
 
     while page <= max_pages:
         if cancel_fn and cancel_fn():
             break
-        log_fn(f"Scanning {mode} page {page}…")
 
         params: dict = {
             "sid":                  sid,
@@ -71,6 +78,11 @@ def ib_fetch_submission_ids(
             params["username"] = username
         else:
             params["favoritedby"] = username
+
+        log_fn(
+            f"[IB] {mode.title()} — user='{username}'  page={page}"
+            f"  endpoint=api_search.php  orderby=create_datetime"
+        )
 
         r = requests.get(
             f"{IB_API}/api_search.php",
@@ -86,12 +98,16 @@ def ib_fetch_submission_ids(
 
         subs = data.get("submissions", [])
         if not subs:
-            log_fn(f"No more pages (stopped at page {page}).")
+            log_fn(f"  No results on page {page} — done.")
             break
 
         ids = [s["submission_id"] for s in subs]
         all_ids.extend(ids)
-        log_fn(f"  Page {page}: {len(ids)} submissions (total: {len(all_ids)})")
+        pages_total = data.get("pages_count", "?")
+        log_fn(
+            f"  Page {page}/{pages_total}: {len(ids)} submissions"
+            f"  |  total collected: {len(all_ids)}"
+        )
 
         if page >= int(data.get("pages_count", "1")):
             break
@@ -161,6 +177,79 @@ def ib_fetch_unread_submission_ids(
     return all_ids
 
 
+def ib_fetch_favourite_ids(
+    session: "requests.Session",
+    user_id: str,
+    max_pages: int,
+    log_fn=print,
+    cancel_fn=None,
+) -> list[str]:
+    """
+    Scrape the Inkbunny favourites page using the same endpoint the web browser
+    uses: /submissionsviewall.php?mode=userfavs&user_id=X&orderby=fav_datetime.
+    This guarantees the results and ordering match exactly what you see in the
+    browser.  user_id is the numeric ID returned by ib_login().
+    """
+    all_ids: list[str] = []
+    seen: set[str] = set()
+    rid: str | None = None
+
+    for page_num in range(1, max_pages + 1):
+        if cancel_fn and cancel_fn():
+            break
+
+        params: dict = {
+            "mode":    "userfavs",
+            "user_id": user_id,
+            "page":    page_num,
+            "orderby": "fav_datetime",
+        }
+        if rid:
+            params["rid"] = rid
+
+        log_fn(
+            f"[IB] Favourites — user_id={user_id}  page={page_num}"
+            f"  orderby=fav_datetime"
+            + (f"  rid={rid}" if rid else "")
+        )
+
+        r = session.get(f"{IB_API}/submissionsviewall.php", params=params, timeout=20)
+        r.raise_for_status()
+
+        if rid is None:
+            m = re.search(r"[?&]rid=([a-f0-9]+)", r.url)
+            if m:
+                rid = m.group(1)
+                log_fn(f"  Snapshot token (rid): {rid}")
+
+        soup = BeautifulSoup(r.text, "lxml")
+
+        ids: list[str] = []
+        for a in soup.find_all("a", href=re.compile(r"^/s/\d+")):
+            m = re.match(r"/s/(\d+)", a["href"])
+            if m:
+                sub_id = m.group(1)
+                if sub_id not in seen:
+                    seen.add(sub_id)
+                    ids.append(sub_id)
+
+        if not ids:
+            log_fn(f"  No favourites on page {page_num} — done.")
+            break
+
+        all_ids.extend(ids)
+        log_fn(
+            f"  Page {page_num}: {len(ids)} submissions"
+            f"  |  total collected: {len(all_ids)}"
+        )
+
+        if not soup.find("a", string=re.compile(r"next", re.I)):
+            break
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return all_ids
+
+
 def ib_get_file_infos(sid: str, submission_ids: list[str], log_fn=print) -> list[dict]:
     """
     Resolve submission IDs to individual file metadata in batches.
@@ -169,14 +258,20 @@ def ib_get_file_infos(sid: str, submission_ids: list[str], log_fn=print) -> list
     results: list[dict] = []
     batch_size = 100
 
+    total_batches = (len(submission_ids) + batch_size - 1) // batch_size
     for i in range(0, len(submission_ids), batch_size):
-        batch = submission_ids[i : i + batch_size]
-        log_fn(f"Fetching file info for submissions {i + 1}–{i + len(batch)}…")
+        batch      = submission_ids[i : i + batch_size]
+        batch_num  = i // batch_size + 1
+        log_fn(
+            f"[IB] File info — batch {batch_num}/{total_batches}"
+            f"  ({len(batch)} submissions, IDs {batch[0]}…{batch[-1]})"
+        )
         r = requests.get(
             f"{IB_API}/api_submissions.php",
             params={
                 "sid":              sid,
                 "submission_ids":   ",".join(batch),
+                "show_files":       "yes",
                 "show_description": "no",
                 "show_writing":     "no",
             },
@@ -189,23 +284,27 @@ def ib_get_file_infos(sid: str, submission_ids: list[str], log_fn=print) -> list
         for sub in data.get("submissions", []):
             sub_id   = sub.get("submission_id", "")
             sub_type = sub.get("type", "")
-            if sub_type in _IB_TEXT_TYPES:
-                log_fn(f"  Skipping submission {sub_id} — text content ({sub_type}).")
-                continue
             title    = sub.get("title", sub_id)
             username = sub.get("username", "unknown")
-            for f in sub.get("files", []):
+            files    = sub.get("files", [])
+            if sub_type in _IB_TEXT_TYPES:
+                log_fn(f"  [{sub_id}] '{title}' by {username} — SKIP (type={sub_type})")
+                continue
+            log_fn(
+                f"  [{sub_id}] '{title}' by {username}"
+                f"  type={sub_type or 'unknown'}  files={len(files)}"
+            )
+            for f in files:
                 url = f.get("file_url_full") or ""
                 if not url:
-                    # file_url_screen is a thumbnail/preview image for video and audio
-                    # submissions — never use it as a fallback for the actual file.
-                    log_fn(f"  Warning: submission {sub_id} has no file_url_full — skipping file.")
+                    log_fn(f"    ↳ WARNING: no file_url_full — skipping")
                     continue
                 file_name = f.get("file_name", "")
                 file_ext  = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
                 if file_ext in _TEXT_EXTENSIONS:
-                    log_fn(f"  Skipping text file '{file_name}' in submission {sub_id}.")
+                    log_fn(f"    ↳ SKIP text file: {file_name}")
                     continue
+                log_fn(f"    ↳ {file_name}")
                 results.append({
                     "url":           url,
                     "filename":      file_name,
@@ -250,25 +349,31 @@ def download_ib_files(
             url    = info["url"]
             sub_id = info.get("submission_id", "")
             orig   = info.get("filename", "")
+            title  = info.get("title", sub_id)
+            uname  = info.get("username", "")
 
             if orig:
                 fname = f"{sub_id}_{sanitize_filename(orig)}"
             else:
                 raw_ext = url.rsplit(".", 1)[-1].split("?")[0][:10].lower()
                 ext     = raw_ext if raw_ext else "bin"
-                title   = sanitize_filename(info.get("title", sub_id))[:80]
-                fname   = f"{sub_id}_{title}.{ext}"
+                fname   = f"{sub_id}_{sanitize_filename(title)[:80]}.{ext}"
 
             fname = fname[:200]
             fpath = os.path.join(output_dir, fname)
 
             if os.path.exists(fpath):
-                log_fn(f"Skipped (exists): {fname}")
+                log_fn(f"[IB {sub_id}] Skipped (exists): {fname}")
                 with lock:
                     ok_sub_ids.add(sub_id)
             else:
+                log_fn(f"[IB {sub_id}] Downloading: {fname}  (by {uname}, '{title}')")
                 nbytes = _stream_download(url, fpath, None, file_progress_fn)
-                log_fn(f"Saved: {fname}")
+                size_str = (
+                    f"{nbytes / 1_048_576:.1f} MB" if nbytes >= 1_048_576
+                    else f"{nbytes / 1024:.1f} KB"
+                )
+                log_fn(f"[IB {sub_id}] Saved: {fname}  ({size_str})")
                 with lock:
                     counter["ok"]    += 1
                     counter["bytes"] += nbytes

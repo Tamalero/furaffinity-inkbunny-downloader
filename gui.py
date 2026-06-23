@@ -136,8 +136,8 @@ class DownloadWorker(QThread):
     # ── Inkbunny flow ──────────────────────────────────────────────────────────
 
     def _run_ib(self, cfg: dict):
-        sid, session = ib_download.ib_login(cfg["username"], cfg["password"])
-        self._log("Login successful.")
+        sid, user_id, session = ib_download.ib_login(cfg["username"], cfg["password"])
+        self._log(f"Login successful — username: {cfg['username']}  user_id: {user_id}")
 
         mode_text = cfg["mode"]
         out_dir   = os.path.join(cfg["output"], "Inkbunny")
@@ -150,11 +150,35 @@ class DownloadWorker(QThread):
                 log_fn=self._log,
                 cancel_fn=lambda: self._stop,
             )
-        else:
+        elif mode_text == "User Favourites":
+            target = cfg["target"].strip()
+            if not target or target == cfg["username"]:
+                # Own favourites — use the exact same web endpoint as the browser
+                # (submissionsviewall.php?mode=userfavs&user_id=X&orderby=fav_datetime)
+                self._log(
+                    f"Fetching your favourites via web scrape"
+                    f" (user_id={user_id}, orderby=fav_datetime)…"
+                )
+                sub_ids = ib_download.ib_fetch_favourite_ids(
+                    session, user_id,
+                    max_pages=cfg["pages"],
+                    log_fn=self._log,
+                    cancel_fn=lambda: self._stop,
+                )
+            else:
+                # Another user's favourites — use the search API
+                self._log(f"Fetching favourites of '{target}' via API…")
+                sub_ids = ib_download.ib_fetch_submission_ids(
+                    sid, target, "favourites",
+                    max_pages=cfg["pages"],
+                    log_fn=self._log,
+                    cancel_fn=lambda: self._stop,
+                )
+        else:  # User Gallery
             target = cfg["target"] or cfg["username"]
-            mode   = "favourites" if mode_text == "User Favourites" else "gallery"
+            self._log(f"Fetching gallery of '{target}'…")
             sub_ids = ib_download.ib_fetch_submission_ids(
-                sid, target, mode,
+                sid, target, "gallery",
                 max_pages=cfg["pages"],
                 log_fn=self._log,
                 cancel_fn=lambda: self._stop,
