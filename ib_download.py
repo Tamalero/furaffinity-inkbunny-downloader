@@ -58,16 +58,19 @@ def ib_login(
     # configured ratings (e.g. "11111" = all content, "10000" = General only).
     ratingsmask = str(data.get("ratingsmask", "")).strip()
 
-    if allow_adult:
-        # Use the account's saved mask. If missing or "0"/"00000", fall back to
-        # enabling everything — IB caps it to what the account actually allows.
-        mask_to_set = ratingsmask if ratingsmask not in ("", "0", "00000") else "11111"
-    else:
-        mask_to_set = "0"
-
+    # api_userrating.php uses individual tag[N] params, NOT a ratingsmask string.
+    # tag[2]=Nudity, tag[3]=Violence, tag[4]=Sexual/Adult, tag[5]=Strong Violence.
+    # All default to "no" (General-only) for new sessions.
+    tag_value = "yes" if allow_adult else "no"
     ra = session.get(
         f"{IB_API}/api_userrating.php",
-        params={"sid": sid, "ratingsmask": mask_to_set},
+        params={
+            "sid":    sid,
+            "tag[2]": tag_value,
+            "tag[3]": tag_value,
+            "tag[4]": tag_value,
+            "tag[5]": tag_value,
+        },
         timeout=15,
     )
     ra.raise_for_status()
@@ -77,9 +80,10 @@ def ib_login(
             f"api_userrating.php error {ra_data['error_code']}: "
             f"{ra_data.get('error_message', 'unknown')}"
         )
-    effective_mask = ra_data.get("ratingsmask", mask_to_set)
+    # Response includes each tag as a field; build a summary for logging.
+    tags_set = {k: v for k, v in ra_data.items() if k.startswith("tag")}
 
-    return sid, user_id, ratingsmask, effective_mask, session
+    return sid, user_id, ratingsmask, tags_set, session
 
 
 def ib_lookup_user_id(sid: str, username: str, log_fn=print) -> str:
