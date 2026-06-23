@@ -138,8 +138,12 @@ class DownloadWorker(QThread):
     # ── Inkbunny flow ──────────────────────────────────────────────────────────
 
     def _run_ib(self, cfg: dict):
-        sid, user_id, session = ib_download.ib_login(cfg["username"], cfg["password"])
-        self._log(f"Login successful — username: {cfg['username']}  user_id: {user_id}")
+        allow_adult = cfg.get("adult_content", True)
+        sid, user_id, session = ib_download.ib_login(
+            cfg["username"], cfg["password"], allow_adult=allow_adult
+        )
+        rating_note = "adult content enabled" if allow_adult else "General-only (adult content disabled)"
+        self._log(f"Login successful — username: {cfg['username']}  user_id: {user_id}  ({rating_note})")
 
         mode_text = cfg["mode"]
         out_dir   = os.path.join(cfg["output"], "Inkbunny")
@@ -401,6 +405,16 @@ class MainWindow(QMainWindow):
         )
         self.chk_clear_notif.setEnabled(False)
 
+        self.chk_adult_content = QCheckBox("Include adult content")
+        self.chk_adult_content.setChecked(True)
+        self.chk_adult_content.setToolTip(
+            "Inkbunny: when checked, your account's content rating preferences are\n"
+            "used (including adult/explicit art). Uncheck to restrict this download\n"
+            "session to General-rated content only.\n\n"
+            "FurAffinity: adult content is controlled through your FA account settings\n"
+            "and the browser session — this checkbox does not apply."
+        )
+
         self.cb_mode = QComboBox()
         self.cb_mode.addItems(self._modes_for_site(self.cb_site.currentText()))
         self.cb_mode.currentTextChanged.connect(self._on_mode_changed)
@@ -427,6 +441,7 @@ class MainWindow(QMainWindow):
         f.addRow("Concurrent Downloads:", self.sp_workers)
         f.addRow("Post Delay:",           self._build_delay_widget())
         f.addRow("",                      self.chk_clear_notif)
+        f.addRow("",                      self.chk_adult_content)
         return g
 
     @staticmethod
@@ -671,6 +686,11 @@ class MainWindow(QMainWindow):
         }
         self.lbl_site_hint.setText(hints.get(site, ""))
 
+        # Adult-content checkbox only applies to Inkbunny (IB uses ratingsmask).
+        # FA adult content is set in the FA account / browser session — no API override.
+        if hasattr(self, "chk_adult_content"):
+            self.chk_adult_content.setEnabled(site == "Inkbunny")
+
         # Persist the previous site's typed credentials before swapping them out,
         # so FA and Inkbunny each keep their own username+password as you switch.
         if self._prev_cred_site and self._prev_cred_site != site:
@@ -779,6 +799,8 @@ class MainWindow(QMainWindow):
             self.le_output.setText(lr["output"])
         if "clear_notif" in lr:
             self.chk_clear_notif.setChecked(lr["clear_notif"] == "True")
+        if "adult_content" in lr:
+            self.chk_adult_content.setChecked(lr["adult_content"] == "True")
         if "delay_type" in lr:
             idx = self.cb_delay_type.findText(lr["delay_type"])
             if idx >= 0:
@@ -796,17 +818,18 @@ class MainWindow(QMainWindow):
 
     def _save_ui_state(self):
         common.save_ui_state({
-            "site":        self.cb_site.currentText(),
-            "mode":        self.cb_mode.currentText(),
-            "target":      self.le_target.text().strip(),
-            "pages":       str(self.sp_pages.value()),
-            "workers":     str(self.sp_workers.value()),
-            "output":      self.le_output.text().strip(),
-            "delay_type":  self.cb_delay_type.currentText(),
-            "delay_fixed": str(self.dsb_delay_fixed.value()),
-            "delay_min":   str(self.dsb_delay_min.value()),
-            "delay_max":   str(self.dsb_delay_max.value()),
-            "clear_notif": str(self.chk_clear_notif.isChecked()),
+            "site":          self.cb_site.currentText(),
+            "mode":          self.cb_mode.currentText(),
+            "target":        self.le_target.text().strip(),
+            "pages":         str(self.sp_pages.value()),
+            "workers":       str(self.sp_workers.value()),
+            "output":        self.le_output.text().strip(),
+            "delay_type":    self.cb_delay_type.currentText(),
+            "delay_fixed":   str(self.dsb_delay_fixed.value()),
+            "delay_min":     str(self.dsb_delay_min.value()),
+            "delay_max":     str(self.dsb_delay_max.value()),
+            "clear_notif":   str(self.chk_clear_notif.isChecked()),
+            "adult_content": str(self.chk_adult_content.isChecked()),
         })
 
     # ── Log helpers ────────────────────────────────────────────────────────────
@@ -909,6 +932,7 @@ class MainWindow(QMainWindow):
             "clear_notifications": (
                 mode == "Submission Notifications" and self.chk_clear_notif.isChecked()
             ),
+            "adult_content": self.chk_adult_content.isChecked(),
         }
 
         self.te_log.clear()

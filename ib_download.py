@@ -19,7 +19,11 @@ _IB_TEXT_TYPES = {"story", "poetry", "prose"}
 _TEXT_EXTENSIONS = {"txt", "doc", "docx", "rtf", "odt", "pdf", "epub", "html", "htm", "md"}
 
 
-def ib_login(username: str, password: str) -> tuple[str, str, "requests.Session"]:
+def ib_login(
+    username: str,
+    password: str,
+    allow_adult: bool = True,
+) -> tuple[str, str, "requests.Session"]:
     """
     Log in to the Inkbunny API.
     Returns (sid, user_id, session) where:
@@ -27,6 +31,10 @@ def ib_login(username: str, password: str) -> tuple[str, str, "requests.Session"
       user_id — numeric user ID string (used for web page scraping)
       session — requests.Session carrying the PHP cookie for web-page access
     Raises ValueError on failure.
+
+    allow_adult: if True (default), restores the account's saved ratingsmask so
+    adult content is visible (both in API responses and web-page scraping).
+    If False, sets ratingsmask=0 (General-only) for this session.
     """
     session = requests.Session()
     session.headers.update(_random_headers())
@@ -50,9 +58,10 @@ def ib_login(username: str, password: str) -> tuple[str, str, "requests.Session"
     # be called to restore the user's saved preferences for this session.
     # Without this, both API calls and web-page scraping silently omit adult
     # content, causing favourites to appear incomplete or out of order.
+    # When allow_adult=False, override to "0" so only General content is visible.
     ra = session.get(
         f"{IB_API}/api_userrating.php",
-        params={"sid": sid, "ratingsmask": ratingsmask},
+        params={"sid": sid, "ratingsmask": ratingsmask if allow_adult else "0"},
         timeout=15,
     )
     ra.raise_for_status()
