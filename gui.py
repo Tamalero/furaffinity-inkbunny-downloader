@@ -159,23 +159,24 @@ class DownloadWorker(QThread):
         elif mode_text == "User Favourites":
             target = cfg["target"].strip()
             if not target or target == cfg["username"]:
-                # api_userrating.php only affects API responses (via sid).
-                # Web page sessions (PHPSESSID) always start General-only and
-                # cannot be changed by api_userrating.php, so web scraping via
-                # submissionsviewall.php silently drops adult content regardless
-                # of the checkbox.  Use the API (sid) path instead.
+                # Web scraping correctly identifies own favourites via PHPSESSID
+                # (api_search.php ignores favoritedby= and returns all submissions).
+                # api_userrating.php?ratingsmask=11 was already called in ib_login;
+                # if IB propagates that to the PHPSESSID session, adult content will
+                # appear here too. Ordering matches the browser (fav_datetime).
                 self._log(
-                    f"Fetching your favourites via API"
-                    f" (user='{cfg['username']}', adult={'enabled' if allow_adult else 'disabled'})…"
+                    f"Fetching your favourites via web scrape"
+                    f" (user_id={user_id}, orderby=fav_datetime)…"
                 )
-                sub_ids = ib_download.ib_fetch_submission_ids(
-                    sid, cfg["username"], "favourites",
+                sub_ids = ib_download.ib_fetch_favourite_ids(
+                    session, user_id,
                     max_pages=cfg["pages"],
                     log_fn=self._log,
                     cancel_fn=lambda: self._stop,
                 )
             else:
-                # Another user's favourites — use the search API
+                # Another user's favourites — fall back to API (best effort;
+                # favoritedby= may not filter correctly, see known issue above)
                 self._log(f"Fetching favourites of '{target}' via API…")
                 sub_ids = ib_download.ib_fetch_submission_ids(
                     sid, target, "favourites",
