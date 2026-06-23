@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 GITHUB_REPO = "Tamalero/furaffinity-inkbunny-downloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
