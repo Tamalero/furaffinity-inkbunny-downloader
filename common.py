@@ -25,6 +25,10 @@ IMAGE_EXTENSIONS = {
     "tiff", "tif", "avif",
 }
 
+VIDEO_EXTENSIONS = {
+    "mp4", "webm", "mov", "avi", "mkv", "flv", "swf", "wmv", "m4v",
+}
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",

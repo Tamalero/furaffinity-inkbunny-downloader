@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from common import (
-    CONFIG_DIR, USER_AGENTS, IMAGE_EXTENSIONS,
+    CONFIG_DIR, USER_AGENTS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS,
     _random_headers, _stream_download, sanitize_filename,
 )
 
@@ -515,16 +515,18 @@ def download_fa_submissions(
         ts = _clone_session(session)   # per-thread session copy
         try:
             dl_url, title, artist = fa_get_download_info(ts, sub_id)
-            raw_ext = dl_url.rsplit(".", 1)[-1].split("?")[0][:10].lower()
-            ext     = raw_ext if raw_ext else "bin"
-            fname   = f"{sanitize_filename(artist)[:40]}_{sanitize_filename(title)[:80]}_{sub_id}.{ext}"
-            fpath   = os.path.join(output_dir, fname)
+            raw_ext  = dl_url.rsplit(".", 1)[-1].split("?")[0][:10].lower()
+            ext      = raw_ext if raw_ext else "bin"
+            fname    = f"{sanitize_filename(artist)[:40]}_{sanitize_filename(title)[:80]}_{sub_id}.{ext}"
+            dest_dir = os.path.join(output_dir, "video") if ext in VIDEO_EXTENSIONS else output_dir
+            fpath    = os.path.join(dest_dir, fname)
 
             if os.path.exists(fpath):
                 log_fn(f"Skipped (exists): {fname}")
                 with lock:
                     ok_ids.append(sub_id)
             else:
+                os.makedirs(dest_dir, exist_ok=True)
                 nbytes = _stream_download(dl_url, fpath, ts, file_progress_fn)
                 log_fn(f"Saved: {fname}")
                 with lock:

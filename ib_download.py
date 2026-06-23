@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 
-from common import _random_headers, _stream_download, sanitize_filename, IMAGE_EXTENSIONS
+from common import _random_headers, _stream_download, sanitize_filename, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 
 IB_API = "https://inkbunny.net"
 
@@ -397,14 +397,17 @@ def download_ib_files(
                 ext     = raw_ext if raw_ext else "bin"
                 fname   = f"{sub_id}_{sanitize_filename(title)[:80]}.{ext}"
 
-            fname = fname[:200]
-            fpath = os.path.join(output_dir, fname)
+            fname     = fname[:200]
+            ext_check = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            dest_dir  = os.path.join(output_dir, "video") if ext_check in VIDEO_EXTENSIONS else output_dir
+            fpath     = os.path.join(dest_dir, fname)
 
             if os.path.exists(fpath):
                 log_fn(f"[IB {sub_id}] Skipped (exists): {fname}")
                 with lock:
                     ok_sub_ids.add(sub_id)
             else:
+                os.makedirs(dest_dir, exist_ok=True)
                 log_fn(f"[IB {sub_id}] Downloading: {fname}  (by {uname}, '{title}')")
                 nbytes = _stream_download(url, fpath, None, file_progress_fn)
                 size_str = (
@@ -416,7 +419,6 @@ def download_ib_files(
                     counter["ok"]    += 1
                     counter["bytes"] += nbytes
                     ok_sub_ids.add(sub_id)
-                ext_check = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
                 if preview_fn and ext_check in IMAGE_EXTENSIONS:
                     preview_fn(fpath)
         except Exception as exc:
