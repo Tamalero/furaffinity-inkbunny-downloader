@@ -251,6 +251,8 @@ class MainWindow(QMainWindow):
         self.worker: DownloadWorker | None          = None
         self._current_preview_pixmap: QPixmap | None = None
         self._prev_cred_site: str | None             = None
+        self._target_per_mode: dict[str, str]        = {}
+        self._prev_mode: str | None                  = None
 
         self._build_ui()
         self._load_saved_credentials()
@@ -641,6 +643,15 @@ class MainWindow(QMainWindow):
         self.le_password.setText(password or "")
 
     def _on_mode_changed(self, mode: str):
+        # Stash the target typed for the departing mode, then restore the one
+        # previously used for the arriving mode.  Without this, a Gallery target
+        # (e.g. "MishaJeans") would bleed into Favourites mode and download that
+        # artist's favourites instead of the logged-in user's own.
+        if self._prev_mode is not None:
+            self._target_per_mode[self._prev_mode] = self.le_target.text()
+        self._prev_mode = mode
+        self.le_target.setText(self._target_per_mode.get(mode, ""))
+
         is_notif = mode == "Submission Notifications"
         self.le_target.setEnabled(not is_notif)
         self.chk_clear_notif.setEnabled(is_notif)
@@ -695,6 +706,10 @@ class MainWindow(QMainWindow):
                 self.cb_mode.setCurrentIndex(idx)
         if "target" in lr:
             self.le_target.setText(lr["target"])
+            # Attribute the saved target to the restored mode so that switching
+            # modes doesn't accidentally carry it over to a different mode.
+            self._target_per_mode[self.cb_mode.currentText()] = lr["target"]
+            self._prev_mode = self.cb_mode.currentText()
         if "pages" in lr:
             try:
                 self.sp_pages.setValue(int(lr["pages"]))
