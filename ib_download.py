@@ -83,10 +83,10 @@ def ib_fetch_submission_ids(
 ) -> list[str]:
     """
     Paginate the Inkbunny search API for gallery or favourites.
-    For favourites, requests orderby=fav_datetime so IB returns them in
-    the same order shown in the browser (newest-favorited first). This path
-    uses sid which respects the ratingsmask set by api_userrating.php,
-    so adult content is included when allow_adult=True was passed to ib_login.
+    Uses sid so the ratingsmask set by api_userrating.php is respected —
+    adult content is included when allow_adult=True was passed to ib_login.
+    orderby=fav_datetime is not supported by api_search.php (returns empty
+    results); ordering is by create_datetime for both modes.
     Returns a flat list of submission IDs.
     """
     all_ids: list[str] = []
@@ -96,26 +96,18 @@ def ib_fetch_submission_ids(
         if cancel_fn and cancel_fn():
             break
 
+        orderby = "create_datetime"
+        params: dict = {
+            "sid":                  sid,
+            "page":                 page,
+            "submissions_per_page": 100,
+            "orderby":              orderby,
+            "random":               "no",
+        }
         if mode == "gallery":
-            orderby = "create_datetime"
-            params: dict = {
-                "sid":                  sid,
-                "page":                 page,
-                "submissions_per_page": 100,
-                "orderby":              orderby,
-                "random":               "no",
-                "username":             username,
-            }
+            params["username"] = username
         else:
-            orderby = "fav_datetime"
-            params = {
-                "sid":                  sid,
-                "page":                 page,
-                "submissions_per_page": 100,
-                "orderby":              orderby,
-                "random":               "no",
-                "favoritedby":          username,
-            }
+            params["favoritedby"] = username
 
         log_fn(
             f"[IB] {mode.title()} — user='{username}'  page={page}"

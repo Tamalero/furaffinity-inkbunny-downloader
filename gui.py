@@ -166,7 +166,7 @@ class DownloadWorker(QThread):
                 # of the checkbox.  Use the API (sid) path instead.
                 self._log(
                     f"Fetching your favourites via API"
-                    f" (user='{cfg['username']}', orderby=fav_datetime)…"
+                    f" (user='{cfg['username']}', adult={'enabled' if allow_adult else 'disabled'})…"
                 )
                 sub_ids = ib_download.ib_fetch_submission_ids(
                     sid, cfg["username"], "favourites",
