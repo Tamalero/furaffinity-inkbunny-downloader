@@ -139,11 +139,14 @@ class DownloadWorker(QThread):
 
     def _run_ib(self, cfg: dict):
         allow_adult = cfg.get("adult_content", True)
-        sid, user_id, session = ib_download.ib_login(
+        sid, user_id, ratingsmask, session = ib_download.ib_login(
             cfg["username"], cfg["password"], allow_adult=allow_adult
         )
         rating_note = "adult content enabled" if allow_adult else "General-only (adult content disabled)"
-        self._log(f"Login successful — username: {cfg['username']}  user_id: {user_id}  ({rating_note})")
+        self._log(
+            f"Login successful — username: {cfg['username']}  user_id: {user_id}"
+            f"  ratingsmask={ratingsmask!r}  ({rating_note})"
+        )
 
         mode_text = cfg["mode"]
         out_dir   = os.path.join(cfg["output"], "Inkbunny")
@@ -159,28 +162,31 @@ class DownloadWorker(QThread):
         elif mode_text == "User Favourites":
             target = cfg["target"].strip()
             if not target or target == cfg["username"]:
-                # Web scraping correctly identifies own favourites via PHPSESSID
-                # (api_search.php ignores favoritedby= and returns all submissions).
-                # api_userrating.php?ratingsmask=11 was already called in ib_login;
-                # if IB propagates that to the PHPSESSID session, adult content will
-                # appear here too. Ordering matches the browser (fav_datetime).
+                # Own favourites: use API with favs_user_id + orderby=fav_datetime.
+                # api_search.php?favs_user_id=N correctly filters to own favourites
+                # and supports fav_datetime ordering (confirmed in IB wiki).
+                # The ratingsmask applied in ib_login ensures adult content is visible.
                 self._log(
-                    f"Fetching your favourites via web scrape"
-                    f" (user_id={user_id}, orderby=fav_datetime)…"
+                    f"Fetching your favourites via API"
+                    f" (favs_user_id={user_id}, orderby=fav_datetime)…"
                 )
-                sub_ids = ib_download.ib_fetch_favourite_ids(
-                    session, user_id,
+                sub_ids = ib_download.ib_fetch_submission_ids(
+                    sid, cfg["username"], "favourites",
                     max_pages=cfg["pages"],
+                    user_id=user_id,
                     log_fn=self._log,
                     cancel_fn=lambda: self._stop,
                 )
             else:
-                # Another user's favourites — fall back to API (best effort;
-                # favoritedby= may not filter correctly, see known issue above)
-                self._log(f"Fetching favourites of '{target}' via API…")
+                # Another user's favourites — resolve their numeric user_id first,
+                # then use the same favs_user_id API path.
+                self._log(f"Resolving user_id for '{target}'…")
+                fav_user_id = ib_download.ib_lookup_user_id(sid, target, log_fn=self._log)
+                self._log(f"Fetching favourites of '{target}' via API (favs_user_id={fav_user_id})…")
                 sub_ids = ib_download.ib_fetch_submission_ids(
                     sid, target, "favourites",
                     max_pages=cfg["pages"],
+                    user_id=fav_user_id,
                     log_fn=self._log,
                     cancel_fn=lambda: self._stop,
                 )

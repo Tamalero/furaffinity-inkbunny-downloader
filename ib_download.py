@@ -23,20 +23,21 @@ def ib_login(
     username: str,
     password: str,
     allow_adult: bool = True,
-) -> tuple[str, str, "requests.Session"]:
+) -> tuple[str, str, str, "requests.Session"]:
     """
     Log in to the Inkbunny API.
-    Returns (sid, user_id, session) where:
-      sid     — API session token (passed to all API calls)
-      user_id — numeric user ID string
-      session — requests.Session carrying the PHP cookie (for web-page scraping
-                of notifications inbox, which has no REST API equivalent)
+    Returns (sid, user_id, ratingsmask, session) where:
+      sid         — API session token (passed to all API calls)
+      user_id     — numeric user ID string
+      ratingsmask — binary string of account's allowed ratings (e.g. "11111")
+      session     — requests.Session with PHP cookie (for notifications scraping)
     Raises ValueError on failure.
 
-    allow_adult: if True (default), calls api_userrating.php with ratingsmask=11
-    so API responses include Mature + Adult content. Has NO effect on web page
-    rendering — PHP sessions always start General-only regardless.
-    If False, keeps ratingsmask=0 (General-only) for API calls too.
+    allow_adult: if True (default), applies the account's saved ratingsmask via
+    api_userrating.php so API responses include adult content. The IB wiki confirms
+    the login response ratingsmask is the account's configured preference (a binary
+    string like "11111"), NOT a session default. Falls back to "11111" if absent.
+    api_userrating.php only affects API (sid) calls, not PHPSESSID web sessions.
     """
     session = requests.Session()
     session.headers.update(_random_headers())
@@ -52,41 +53,74 @@ def ib_login(
     sid = data.get("sid")
     if not sid:
         raise ValueError("Inkbunny login failed — no session ID returned.")
-    user_id = str(data.get("user_id", ""))
+    user_id     = str(data.get("user_id",     ""))
+    # ratingsmask in the login response is a 5-char binary string of the account's
+    # configured ratings (e.g. "11111" = all content, "10000" = General only).
+    ratingsmask = str(data.get("ratingsmask", "")).strip()
 
-    # api_userrating.php enables adult content for API calls that use sid.
-    # The login response ratingsmask is the API session default (0 = General
-    # only), NOT the account preference — passing it back would be a no-op.
-    # Hardcode 11 (Mature + Adult) when allow_adult=True so API search results
-    # include all ratings the account allows.
-    # NOTE: this call only affects API responses (via sid). It does NOT enable
-    # adult content for web page rendering (PHPSESSID sessions). Own-favourites
-    # must therefore use ib_fetch_submission_ids (API) not ib_fetch_favourite_ids
-    # (web scraping), which permanently sees only General content.
+    if allow_adult:
+        # Use the account's saved mask. If missing or "0"/"00000", fall back to
+        # enabling everything — IB caps it to what the account actually allows.
+        mask_to_set = ratingsmask if ratingsmask not in ("", "0", "00000") else "11111"
+    else:
+        mask_to_set = "0"
+
     ra = session.get(
         f"{IB_API}/api_userrating.php",
-        params={"sid": sid, "ratingsmask": "11" if allow_adult else "0"},
+        params={"sid": sid, "ratingsmask": mask_to_set},
         timeout=15,
     )
     ra.raise_for_status()
 
-    return sid, user_id, session
+    return sid, user_id, ratingsmask, session
+
+
+def ib_lookup_user_id(sid: str, username: str, log_fn=print) -> str:
+    """
+    Resolve a username to its numeric user_id via api_search.php.
+    Returns the user_id string, or "" if the user has no submissions.
+    """
+    r = requests.get(
+        f"{IB_API}/api_search.php",
+        params={
+            "sid":                  sid,
+            "username":             username,
+            "submissions_per_page": 1,
+            "submission_ids_only":  "no",
+        },
+        headers=_random_headers(),
+        timeout=20,
+    )
+    r.raise_for_status()
+    data = r.json()
+    for sub in data.get("submissions", []):
+        uid = str(sub.get("user_id", ""))
+        if uid:
+            log_fn(f"[IB] Resolved '{username}' → user_id={uid}")
+            return uid
+    log_fn(f"[IB] WARNING: could not resolve user_id for '{username}' (no submissions found)")
+    return ""
 
 
 def ib_fetch_submission_ids(
     sid: str,
     username: str,
-    mode: str,          # "gallery" | "favourites"
+    mode: str,           # "gallery" | "favourites"
     max_pages: int,
+    user_id: str = "",   # numeric user ID; required for "favourites" (favs_user_id)
     log_fn=print,
     cancel_fn=None,
 ) -> list[str]:
     """
     Paginate the Inkbunny search API for gallery or favourites.
-    Uses sid so the ratingsmask set by api_userrating.php is respected —
-    adult content is included when allow_adult=True was passed to ib_login.
-    orderby=fav_datetime is not supported by api_search.php (returns empty
-    results); ordering is by create_datetime for both modes.
+
+    Gallery:    api_search.php?username=X&orderby=create_datetime
+    Favourites: api_search.php?favs_user_id=N&orderby=fav_datetime
+                (IB wiki: favs_user_id is the correct param, not favoritedby;
+                 fav_datetime ordering is only supported with favs_user_id)
+
+    Uses sid so the ratingsmask from api_userrating.php is applied — adult
+    content is included when allow_adult=True was passed to ib_login.
     Returns a flat list of submission IDs.
     """
     all_ids: list[str] = []
@@ -96,22 +130,31 @@ def ib_fetch_submission_ids(
         if cancel_fn and cancel_fn():
             break
 
-        orderby = "create_datetime"
-        params: dict = {
-            "sid":                  sid,
-            "page":                 page,
-            "submissions_per_page": 100,
-            "orderby":              orderby,
-            "random":               "no",
-        }
         if mode == "gallery":
-            params["username"] = username
+            orderby = "create_datetime"
+            params: dict = {
+                "sid":                  sid,
+                "page":                 page,
+                "submissions_per_page": 100,
+                "orderby":              orderby,
+                "random":               "no",
+                "username":             username,
+            }
         else:
-            params["favoritedby"] = username
+            orderby = "fav_datetime"
+            params = {
+                "sid":                  sid,
+                "page":                 page,
+                "submissions_per_page": 100,
+                "orderby":              orderby,
+                "random":               "no",
+                "favs_user_id":         user_id,
+            }
 
         log_fn(
-            f"[IB] {mode.title()} — user='{username}'  page={page}"
-            f"  endpoint=api_search.php  orderby={orderby}"
+            f"[IB] {mode.title()} — user='{username}'"
+            + (f"  user_id={user_id}" if mode != "gallery" else "")
+            + f"  page={page}  endpoint=api_search.php  orderby={orderby}"
         )
 
         r = requests.get(
