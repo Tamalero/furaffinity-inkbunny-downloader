@@ -223,9 +223,16 @@ def ib_fetch_favourite_ids(
                 log_fn(f"  Snapshot token (rid): {rid}")
 
         soup = BeautifulSoup(r.text, "lxml")
+        log_fn(f"  Final URL: {r.url}")
 
         ids: list[str] = []
+        # Only collect <a> tags that contain an <img> child.
+        # On the IB favourites page, thumbnail links always wrap an <img>.
+        # Header notification links, sidebar links, and title-text links do NOT
+        # have <img> children — filtering by img presence removes them.
         for a in soup.find_all("a", href=re.compile(r"^/s/\d+")):
+            if not a.find("img"):
+                continue
             m = re.match(r"/s/(\d+)", a["href"])
             if m:
                 sub_id = m.group(1)
@@ -234,13 +241,21 @@ def ib_fetch_favourite_ids(
                     ids.append(sub_id)
 
         if not ids:
-            log_fn(f"  No favourites on page {page_num} — done.")
+            all_links = soup.find_all("a", href=re.compile(r"^/s/\d+"))
+            if all_links:
+                log_fn(
+                    f"  No thumbnail links on page {page_num}"
+                    f" ({len(all_links)} text-only /s/ links found — no <img> wrappers)."
+                )
+            else:
+                log_fn(f"  No favourites on page {page_num} — done.")
             break
 
         all_ids.extend(ids)
         log_fn(
-            f"  Page {page_num}: {len(ids)} submissions"
+            f"  Page {page_num}: {len(ids)} favourites"
             f"  |  total collected: {len(all_ids)}"
+            f"  |  first IDs: {', '.join(ids[:5])}"
         )
 
         if not soup.find("a", string=re.compile(r"next", re.I)):

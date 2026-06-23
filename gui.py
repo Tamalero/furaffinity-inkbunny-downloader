@@ -1,4 +1,6 @@
+import datetime
 import html
+import json
 import os
 import sys
 import traceback
@@ -194,6 +196,35 @@ class DownloadWorker(QThread):
         if not file_infos:
             self.done.emit(False, "No downloadable files found.")
             return
+
+        # Build per-submission index from file_infos (which is per-file)
+        subs_meta: dict[str, dict] = {}
+        for info in file_infos:
+            sub_id = info["submission_id"]
+            if sub_id not in subs_meta:
+                subs_meta[sub_id] = {
+                    "submission_id": sub_id,
+                    "title":         info["title"],
+                    "username":      info["username"],
+                    "file_count":    0,
+                }
+            subs_meta[sub_id]["file_count"] += 1
+
+        scan_data = {
+            "mode":                 mode_text,
+            "scanned_at":           datetime.datetime.now().isoformat(timespec="seconds"),
+            "ib_username":          cfg["username"],
+            "user_id":              user_id,
+            "total_submission_ids": len(sub_ids),
+            "total_files":          len(file_infos),
+            "submission_ids":       sub_ids,
+            "submissions":          [subs_meta[s] for s in sub_ids if s in subs_meta],
+        }
+        os.makedirs(out_dir, exist_ok=True)
+        scan_path = os.path.join(out_dir, "_ib_scan.json")
+        with open(scan_path, "w", encoding="utf-8") as fh:
+            json.dump(scan_data, fh, indent=2, ensure_ascii=False)
+        self._log(f"Scan index saved → {scan_path}")
 
         self._log(f"Found {len(file_infos)} files. Starting download…")
 
