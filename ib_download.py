@@ -12,6 +12,12 @@ from common import _random_headers, _stream_download, sanitize_filename, IMAGE_E
 
 IB_API = "https://inkbunny.net"
 
+# Inkbunny submission types that contain only text — skip entirely.
+_IB_TEXT_TYPES = {"story", "poetry", "prose"}
+
+# File extensions considered non-media — skipped even if the API type is unknown.
+_TEXT_EXTENSIONS = {"txt", "doc", "docx", "rtf", "odt", "pdf", "epub", "html", "htm", "md"}
+
 
 def ib_login(username: str, password: str) -> tuple[str, "requests.Session"]:
     """
@@ -182,6 +188,10 @@ def ib_get_file_infos(sid: str, submission_ids: list[str], log_fn=print) -> list
 
         for sub in data.get("submissions", []):
             sub_id   = sub.get("submission_id", "")
+            sub_type = sub.get("type", "")
+            if sub_type in _IB_TEXT_TYPES:
+                log_fn(f"  Skipping submission {sub_id} — text content ({sub_type}).")
+                continue
             title    = sub.get("title", sub_id)
             username = sub.get("username", "unknown")
             for f in sub.get("files", []):
@@ -191,9 +201,14 @@ def ib_get_file_infos(sid: str, submission_ids: list[str], log_fn=print) -> list
                     # submissions — never use it as a fallback for the actual file.
                     log_fn(f"  Warning: submission {sub_id} has no file_url_full — skipping file.")
                     continue
+                file_name = f.get("file_name", "")
+                file_ext  = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+                if file_ext in _TEXT_EXTENSIONS:
+                    log_fn(f"  Skipping text file '{file_name}' in submission {sub_id}.")
+                    continue
                 results.append({
                     "url":           url,
-                    "filename":      f.get("file_name", ""),
+                    "filename":      file_name,
                     "title":         title,
                     "username":      username,
                     "submission_id": sub_id,

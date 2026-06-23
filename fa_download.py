@@ -514,10 +514,10 @@ def download_fa_submissions(
             return
         ts = _clone_session(session)   # per-thread session copy
         try:
-            dl_url, title, _artist = fa_get_download_info(ts, sub_id)
+            dl_url, title, artist = fa_get_download_info(ts, sub_id)
             raw_ext = dl_url.rsplit(".", 1)[-1].split("?")[0][:10].lower()
             ext     = raw_ext if raw_ext else "bin"
-            fname   = f"{sanitize_filename(title)[:120]}_{sub_id}.{ext}"
+            fname   = f"{sanitize_filename(artist)[:40]}_{sanitize_filename(title)[:80]}_{sub_id}.{ext}"
             fpath   = os.path.join(output_dir, fname)
 
             if os.path.exists(fpath):
