@@ -139,13 +139,13 @@ class DownloadWorker(QThread):
 
     def _run_ib(self, cfg: dict):
         allow_adult = cfg.get("adult_content", True)
-        sid, user_id, ratingsmask, session = ib_download.ib_login(
+        sid, user_id, ratingsmask, effective_mask, session = ib_download.ib_login(
             cfg["username"], cfg["password"], allow_adult=allow_adult
         )
         rating_note = "adult content enabled" if allow_adult else "General-only (adult content disabled)"
         self._log(
             f"Login successful — username: {cfg['username']}  user_id: {user_id}"
-            f"  ratingsmask={ratingsmask!r}  ({rating_note})"
+            f"  ratingsmask={ratingsmask!r}  effective={effective_mask!r}  ({rating_note})"
         )
 
         mode_text = cfg["mode"]
@@ -174,6 +174,7 @@ class DownloadWorker(QThread):
                     sid, cfg["username"], "favourites",
                     max_pages=cfg["pages"],
                     user_id=user_id,
+                    session=session,
                     log_fn=self._log,
                     cancel_fn=lambda: self._stop,
                 )
@@ -187,6 +188,7 @@ class DownloadWorker(QThread):
                     sid, target, "favourites",
                     max_pages=cfg["pages"],
                     user_id=fav_user_id,
+                    session=session,
                     log_fn=self._log,
                     cancel_fn=lambda: self._stop,
                 )
@@ -196,6 +198,7 @@ class DownloadWorker(QThread):
             sub_ids = ib_download.ib_fetch_submission_ids(
                 sid, target, "gallery",
                 max_pages=cfg["pages"],
+                session=session,
                 log_fn=self._log,
                 cancel_fn=lambda: self._stop,
             )

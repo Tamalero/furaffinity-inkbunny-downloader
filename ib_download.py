@@ -71,8 +71,15 @@ def ib_login(
         timeout=15,
     )
     ra.raise_for_status()
+    ra_data = ra.json()
+    if "error_code" in ra_data:
+        raise ValueError(
+            f"api_userrating.php error {ra_data['error_code']}: "
+            f"{ra_data.get('error_message', 'unknown')}"
+        )
+    effective_mask = ra_data.get("ratingsmask", mask_to_set)
 
-    return sid, user_id, ratingsmask, session
+    return sid, user_id, ratingsmask, effective_mask, session
 
 
 def ib_lookup_user_id(sid: str, username: str, log_fn=print) -> str:
@@ -105,9 +112,13 @@ def ib_lookup_user_id(sid: str, username: str, log_fn=print) -> str:
 def ib_fetch_submission_ids(
     sid: str,
     username: str,
-    mode: str,           # "gallery" | "favourites"
+    mode: str,                              # "gallery" | "favourites"
     max_pages: int,
-    user_id: str = "",   # numeric user ID; required for "favourites" (favs_user_id)
+    user_id: str = "",                      # numeric user ID; required for "favourites"
+    session: "requests.Session | None" = None,  # MUST be passed so PHPSESSID cookie is
+                                            # sent alongside sid; without it the server
+                                            # can't match sid → session ratingsmask and
+                                            # falls back to General-only content
     log_fn=print,
     cancel_fn=None,
 ) -> list[str]:
@@ -119,8 +130,10 @@ def ib_fetch_submission_ids(
                 (IB wiki: favs_user_id is the correct param, not favoritedby;
                  fav_datetime ordering is only supported with favs_user_id)
 
-    Uses sid so the ratingsmask from api_userrating.php is applied — adult
-    content is included when allow_adult=True was passed to ib_login.
+    session must be the requests.Session from ib_login so the PHPSESSID cookie is
+    included in every api_search.php call. IB uses it to look up the session that
+    was updated by api_userrating.php; bare requests.get() drops the cookie and the
+    server falls back to guest-level General-only content filtering.
     Returns a flat list of submission IDs.
     """
     all_ids: list[str] = []
@@ -157,12 +170,15 @@ def ib_fetch_submission_ids(
             + f"  page={page}  endpoint=api_search.php  orderby={orderby}"
         )
 
-        r = requests.get(
-            f"{IB_API}/api_search.php",
-            params=params,
-            headers=_random_headers(),
-            timeout=20,
-        )
+        if session:
+            r = session.get(f"{IB_API}/api_search.php", params=params, timeout=20)
+        else:
+            r = requests.get(
+                f"{IB_API}/api_search.php",
+                params=params,
+                headers=_random_headers(),
+                timeout=20,
+            )
         r.raise_for_status()
         data = r.json()
 
