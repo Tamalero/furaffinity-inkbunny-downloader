@@ -42,7 +42,21 @@ def ib_login(username: str, password: str) -> tuple[str, str, "requests.Session"
     sid = data.get("sid")
     if not sid:
         raise ValueError("Inkbunny login failed — no session ID returned.")
-    user_id = str(data.get("user_id", ""))
+    user_id     = str(data.get("user_id",     ""))
+    ratingsmask = str(data.get("ratingsmask", "0"))
+
+    # IB API sessions start with restricted (General-only) content by default
+    # even when the account has adult content enabled. api_userrating.php must
+    # be called to restore the user's saved preferences for this session.
+    # Without this, both API calls and web-page scraping silently omit adult
+    # content, causing favourites to appear incomplete or out of order.
+    ra = session.get(
+        f"{IB_API}/api_userrating.php",
+        params={"sid": sid, "ratingsmask": ratingsmask},
+        timeout=15,
+    )
+    ra.raise_for_status()
+
     return sid, user_id, session
 
 
