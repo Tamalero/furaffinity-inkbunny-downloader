@@ -159,14 +159,17 @@ class DownloadWorker(QThread):
         elif mode_text == "User Favourites":
             target = cfg["target"].strip()
             if not target or target == cfg["username"]:
-                # Own favourites — use the exact same web endpoint as the browser
-                # (submissionsviewall.php?mode=userfavs&user_id=X&orderby=fav_datetime)
+                # api_userrating.php only affects API responses (via sid).
+                # Web page sessions (PHPSESSID) always start General-only and
+                # cannot be changed by api_userrating.php, so web scraping via
+                # submissionsviewall.php silently drops adult content regardless
+                # of the checkbox.  Use the API (sid) path instead.
                 self._log(
-                    f"Fetching your favourites via web scrape"
-                    f" (user_id={user_id}, orderby=fav_datetime)…"
+                    f"Fetching your favourites via API"
+                    f" (user='{cfg['username']}', orderby=fav_datetime)…"
                 )
-                sub_ids = ib_download.ib_fetch_favourite_ids(
-                    session, user_id,
+                sub_ids = ib_download.ib_fetch_submission_ids(
+                    sid, cfg["username"], "favourites",
                     max_pages=cfg["pages"],
                     log_fn=self._log,
                     cancel_fn=lambda: self._stop,

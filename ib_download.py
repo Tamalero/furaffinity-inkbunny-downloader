@@ -28,13 +28,15 @@ def ib_login(
     Log in to the Inkbunny API.
     Returns (sid, user_id, session) where:
       sid     — API session token (passed to all API calls)
-      user_id — numeric user ID string (used for web page scraping)
-      session — requests.Session carrying the PHP cookie for web-page access
+      user_id — numeric user ID string
+      session — requests.Session carrying the PHP cookie (for web-page scraping
+                of notifications inbox, which has no REST API equivalent)
     Raises ValueError on failure.
 
-    allow_adult: if True (default), restores the account's saved ratingsmask so
-    adult content is visible (both in API responses and web-page scraping).
-    If False, sets ratingsmask=0 (General-only) for this session.
+    allow_adult: if True (default), calls api_userrating.php with ratingsmask=11
+    so API responses include Mature + Adult content. Has NO effect on web page
+    rendering — PHP sessions always start General-only regardless.
+    If False, keeps ratingsmask=0 (General-only) for API calls too.
     """
     session = requests.Session()
     session.headers.update(_random_headers())
@@ -50,18 +52,20 @@ def ib_login(
     sid = data.get("sid")
     if not sid:
         raise ValueError("Inkbunny login failed — no session ID returned.")
-    user_id     = str(data.get("user_id",     ""))
-    ratingsmask = str(data.get("ratingsmask", "0"))
+    user_id = str(data.get("user_id", ""))
 
-    # IB API sessions start with restricted (General-only) content by default
-    # even when the account has adult content enabled. api_userrating.php must
-    # be called to restore the user's saved preferences for this session.
-    # Without this, both API calls and web-page scraping silently omit adult
-    # content, causing favourites to appear incomplete or out of order.
-    # When allow_adult=False, override to "0" so only General content is visible.
+    # api_userrating.php enables adult content for API calls that use sid.
+    # The login response ratingsmask is the API session default (0 = General
+    # only), NOT the account preference — passing it back would be a no-op.
+    # Hardcode 11 (Mature + Adult) when allow_adult=True so API search results
+    # include all ratings the account allows.
+    # NOTE: this call only affects API responses (via sid). It does NOT enable
+    # adult content for web page rendering (PHPSESSID sessions). Own-favourites
+    # must therefore use ib_fetch_submission_ids (API) not ib_fetch_favourite_ids
+    # (web scraping), which permanently sees only General content.
     ra = session.get(
         f"{IB_API}/api_userrating.php",
-        params={"sid": sid, "ratingsmask": ratingsmask if allow_adult else "0"},
+        params={"sid": sid, "ratingsmask": "11" if allow_adult else "0"},
         timeout=15,
     )
     ra.raise_for_status()
@@ -78,9 +82,11 @@ def ib_fetch_submission_ids(
     cancel_fn=None,
 ) -> list[str]:
     """
-    Paginate the Inkbunny search API for gallery or (other-user) favourites.
-    For your OWN favourites use ib_fetch_favourite_ids instead — it uses the
-    web endpoint that exactly matches the browser and orders by fav_datetime.
+    Paginate the Inkbunny search API for gallery or favourites.
+    For favourites, requests orderby=fav_datetime so IB returns them in
+    the same order shown in the browser (newest-favorited first). This path
+    uses sid which respects the ratingsmask set by api_userrating.php,
+    so adult content is included when allow_adult=True was passed to ib_login.
     Returns a flat list of submission IDs.
     """
     all_ids: list[str] = []
@@ -90,21 +96,30 @@ def ib_fetch_submission_ids(
         if cancel_fn and cancel_fn():
             break
 
-        params: dict = {
-            "sid":                  sid,
-            "page":                 page,
-            "submissions_per_page": 100,
-            "orderby":              "create_datetime",
-            "random":               "no",
-        }
         if mode == "gallery":
-            params["username"] = username
+            orderby = "create_datetime"
+            params: dict = {
+                "sid":                  sid,
+                "page":                 page,
+                "submissions_per_page": 100,
+                "orderby":              orderby,
+                "random":               "no",
+                "username":             username,
+            }
         else:
-            params["favoritedby"] = username
+            orderby = "fav_datetime"
+            params = {
+                "sid":                  sid,
+                "page":                 page,
+                "submissions_per_page": 100,
+                "orderby":              orderby,
+                "random":               "no",
+                "favoritedby":          username,
+            }
 
         log_fn(
             f"[IB] {mode.title()} — user='{username}'  page={page}"
-            f"  endpoint=api_search.php  orderby=create_datetime"
+            f"  endpoint=api_search.php  orderby={orderby}"
         )
 
         r = requests.get(
