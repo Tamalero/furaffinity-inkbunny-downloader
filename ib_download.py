@@ -211,61 +211,68 @@ def ib_fetch_submission_ids(
 
 
 def ib_fetch_unread_submission_ids(
-    session: "requests.Session",
+    sid: str,
     max_pages: int,
+    session: "requests.Session | None" = None,
     log_fn=print,
     cancel_fn=None,
 ) -> list[str]:
     """
-    Scrape the Inkbunny 'New Submissions' inbox (/submissionsviewall.php?mode=unreadsubs)
-    for unread submission IDs from watched artists. Uses the web cookie session from
-    ib_login() since there is no REST API endpoint for the unread inbox. Paginates up
-    to max_pages. The 'rid' snapshot token is extracted from the first page URL and
-    carried through subsequent pages to avoid drift from new arrivals during scraping.
+    Fetch unread submission IDs from watched artists via api_search.php?unread_submissions=yes.
+    Uses the API sid (with tag[N]=yes applied by ib_login) so adult-rated notifications are
+    included. session must be the requests.Session from ib_login so the PHPSESSID cookie is
+    sent alongside sid (same requirement as ib_fetch_submission_ids).
     """
     all_ids: list[str] = []
-    seen: set[str] = set()
-    rid: str | None = None
+    page = 1
 
-    for page_num in range(1, max_pages + 1):
+    while page <= max_pages:
         if cancel_fn and cancel_fn():
             break
-        log_fn(f"Scanning new submissions page {page_num}…")
 
-        params: dict = {"mode": "unreadsubs", "page": page_num, "orderby": "unread_datetime"}
-        if rid:
-            params["rid"] = rid
+        params: dict = {
+            "sid":                  sid,
+            "page":                 page,
+            "submissions_per_page": 100,
+            "unread_submissions":   "yes",
+            "orderby":              "unread_datetime",
+            "random":               "no",
+        }
 
-        r = session.get(f"{IB_API}/submissionsviewall.php", params=params, timeout=20)
+        log_fn(f"[IB] Submission Notifications — page={page}  endpoint=api_search.php?unread_submissions=yes")
+
+        if session:
+            r = session.get(f"{IB_API}/api_search.php", params=params, timeout=20)
+        else:
+            r = requests.get(
+                f"{IB_API}/api_search.php",
+                params=params,
+                headers=_random_headers(),
+                timeout=20,
+            )
         r.raise_for_status()
+        data = r.json()
 
-        # Capture the rid from the final URL (server may redirect to add it)
-        if rid is None:
-            m = re.search(r"[?&]rid=([a-f0-9]+)", r.url)
-            if m:
-                rid = m.group(1)
+        if "error_code" in data:
+            raise ValueError(f"Inkbunny API error: {data.get('error_message', 'unknown')}")
 
-        soup = BeautifulSoup(r.text, "lxml")
-
-        ids: list[str] = []
-        for a in soup.find_all("a", href=re.compile(r"^/s/\d+")):
-            m = re.match(r"/s/(\d+)", a["href"])
-            if m:
-                sub_id = m.group(1)
-                if sub_id not in seen:
-                    seen.add(sub_id)
-                    ids.append(sub_id)
-
-        if not ids:
-            log_fn(f"No new submissions on page {page_num} — stopping.")
+        subs = data.get("submissions", [])
+        if not subs:
+            log_fn(f"  No new submissions on page {page} — done.")
             break
 
+        ids = [s["submission_id"] for s in subs]
         all_ids.extend(ids)
-        log_fn(f"  Page {page_num}: {len(ids)} new submissions (total: {len(all_ids)})")
+        pages_total = data.get("pages_count", "?")
+        log_fn(
+            f"  Page {page}/{pages_total}: {len(ids)} new submissions"
+            f"  |  total collected: {len(all_ids)}"
+        )
 
-        if not soup.find("a", string=re.compile(r"next", re.I)):
+        if page >= int(data.get("pages_count", "1")):
             break
-        time.sleep(random.uniform(1.0, 2.0))
+        page += 1
+        time.sleep(0.5)
 
     return all_ids
 

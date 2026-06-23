@@ -154,8 +154,9 @@ class DownloadWorker(QThread):
         if mode_text == "Submission Notifications":
             self._log("Fetching new submissions from watched artists…")
             sub_ids = ib_download.ib_fetch_unread_submission_ids(
-                session,
+                sid,
                 max_pages=cfg["pages"],
+                session=session,
                 log_fn=self._log,
                 cancel_fn=lambda: self._stop,
             )
