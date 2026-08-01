@@ -157,10 +157,13 @@ Files are saved to sub-folders inside the chosen output directory:
 ```
 ~/Pictures/FAIBDownload/
 ├── FurAffinity/
-│   └── Title of Submission_12345678.png
+│   └── 12345678_artistname_original_filename.png
 └── Inkbunny/
     └── 9876543_original_filename.jpg
 ```
+
+Both sites name files `<submission ID>_…_<original filename>`; the FurAffinity
+name also carries the artist's account name.
 
 You can change the output folder at any time by clicking **Browse…** next to the Output Folder field. The selection is remembered between sessions.
 

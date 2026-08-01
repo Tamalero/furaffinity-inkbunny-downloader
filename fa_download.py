@@ -418,14 +418,25 @@ def fa_clear_notifications(
 def fa_get_download_info(
     session: "requests.Session",
     submission_id: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     """
-    Returns (download_url, title, artist) for a FA submission.
+    Returns (download_url, title, artist, original_filename) for a FA submission.
+    `artist` is the account name from /user/<name>/ (the URL slug, not the display
+    name); `original_filename` is the basename the file has on FA's CDN.
     Raises ValueError if no download URL is found.
     """
     r = session.get(f"{FA_BASE}/view/{submission_id}/", timeout=20)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "lxml")
+
+    # The submission's own header block: avatar + title + "by <artist>". Everything
+    # below is scoped to it — a page-wide search picks up the logged-in user's links
+    # in the sidebar nav, which appear FIRST in document order.
+    art_block = (
+        soup.find("div", class_="submission-description-artist")
+        or soup.find("div", class_="submission-id-sub-container")   # older layout
+        or soup.find("div", class_="classic-submission-title")      # classic layout
+    )
 
     # Title
     title = submission_id
@@ -434,18 +445,23 @@ def fa_get_download_info(
         lambda s: s.find("h2",   class_="submission-title"),
         lambda s: s.find("h1"),
     ):
-        el = sel(soup)
+        el = sel(art_block) if art_block else None
+        el = el or sel(soup)
         if el:
             t = el.get_text(strip=True)
             if t:
                 title = t
                 break
 
-    # Artist
-    artist = "unknown"
-    a_el = soup.find("a", href=re.compile(r"^/user/"))
-    if a_el:
-        artist = a_el.get_text(strip=True) or a_el["href"].strip("/").split("/")[-1]
+    # Artist — the account slug, e.g. /user/eclipsewolf/ → "eclipsewolf".
+    # NOT the display name (FA shows those separately) and NOT the first /user/
+    # link on the page: that one is the *downloader's* own nav link, which is how
+    # every file used to end up named after the logged-in user.
+    artist = ""
+    if art_block:
+        a_el = art_block.find("a", href=re.compile(r"^/user/"))
+        if a_el:
+            artist = a_el["href"].strip("/").split("/")[-1]
 
     # Download URL — prefer FA CDN links (//d*.furaffinity.net/…)
     dl_url = ""
@@ -480,7 +496,16 @@ def fa_get_download_info(
     if dl_url.startswith("//"):
         dl_url = "https:" + dl_url
 
-    return dl_url, title, artist
+    # CDN paths are /art/<artist>/<epoch>/<epoch>.<artist>_<name>.<ext> — the last
+    # segment is the original filename, and the /art/ segment is a reliable artist
+    # fallback if the page markup ever changes again.
+    path      = dl_url.split("?")[0]
+    orig_name = path.rsplit("/", 1)[-1]
+    if not artist:
+        m = re.search(r"/art/([^/]+)/", path)
+        artist = m.group(1) if m else "unknown"
+
+    return dl_url, title, artist, orig_name
 
 
 def download_fa_submissions(
@@ -514,10 +539,18 @@ def download_fa_submissions(
             return
         ts = _clone_session(session)   # per-thread session copy
         try:
-            dl_url, title, artist = fa_get_download_info(ts, sub_id)
-            raw_ext  = dl_url.rsplit(".", 1)[-1].split("?")[0][:10].lower()
-            ext      = raw_ext if raw_ext else "bin"
-            fname    = f"{sanitize_filename(artist)[:40]}_{sanitize_filename(title)[:80]}_{sub_id}.{ext}"
+            dl_url, title, artist, orig = fa_get_download_info(ts, sub_id)
+
+            # {submission_id}_{artist}_{original filename} — mirrors the Inkbunny
+            # side, which already names files {sub_id}_{original}.
+            stem, dot, ext = orig.rpartition(".")
+            if not dot:
+                stem = orig or title
+                ext  = dl_url.split("?")[0].rsplit(".", 1)[-1][:10].lower() or "bin"
+            ext = ext.lower()
+            # Truncate the stem, never the extension — a blanket fname[:200] can
+            # lop the suffix off and break the video/preview routing below.
+            fname    = f"{sub_id}_{sanitize_filename(artist)[:40]}_{sanitize_filename(stem)}"[:190] + f".{ext}"
             dest_dir = os.path.join(output_dir, "video") if ext in VIDEO_EXTENSIONS else output_dir
             fpath    = os.path.join(dest_dir, fname)
 
