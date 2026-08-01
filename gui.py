@@ -1,5 +1,4 @@
 import datetime
-import html
 import json
 import os
 import sys
@@ -14,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QCheckBox,
 )
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QFont, QPixmap, QTextCursor, QTextCharFormat, QColor
 
 import common
 import fa_download
@@ -848,14 +847,29 @@ class MainWindow(QMainWindow):
 
     # ── Log helpers ────────────────────────────────────────────────────────────
 
+    def _log_cursor(self) -> "QTextCursor":
+        """A cursor at the end of the log, on a fresh line."""
+        cur = self.te_log.textCursor()
+        cur.movePosition(QTextCursor.MoveOperation.End)
+        if not self.te_log.document().isEmpty():
+            cur.insertBlock()
+        return cur
+
+    # Messages are inserted as literal text, never as HTML. QTextEdit.append()
+    # guesses per message whether its argument is markup (Qt::mightBeRichText),
+    # and pre-escaped text usually fails that guess — so "&#x27;" was shown raw
+    # instead of "'", except in the odd line containing a "<" that happened to
+    # trip the heuristic. Inserting through a cursor needs no escaping, can't be
+    # misread as markup, and keeps the leading indentation HTML would collapse.
+
     def _append_log(self, msg: str):
-        self.te_log.append(html.escape(msg))
+        self._log_cursor().insertText(msg)
         self._scroll_log()
 
     def _append_error(self, msg: str):
-        self.te_log.append(
-            f'<span style="color: #ff5555;">{html.escape(msg)}</span>'
-        )
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor("#ff5555"))
+        self._log_cursor().insertText(msg, fmt)
         self._scroll_log()
 
     def _scroll_log(self):
