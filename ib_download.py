@@ -19,6 +19,15 @@ _IB_TEXT_TYPES = {"story", "poetry", "prose"}
 _TEXT_EXTENSIONS = {"txt", "doc", "docx", "rtf", "odt", "pdf", "epub", "html", "htm", "md"}
 
 
+def _int_or(value, default: int) -> int:
+    """int(value) if it can be read as one, else default. pages_count comes back as
+    an int, a numeric string, or occasionally '' — the last one used to raise."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def ib_login(
     username: str,
     password: str,
@@ -26,10 +35,11 @@ def ib_login(
 ) -> tuple[str, str, str, "requests.Session"]:
     """
     Log in to the Inkbunny API.
-    Returns (sid, user_id, ratingsmask, session) where:
+    Returns (sid, user_id, ratingsmask, tags_set, session) where:
       sid         — API session token (passed to all API calls)
       user_id     — numeric user ID string
       ratingsmask — binary string of account's allowed ratings (e.g. "11111")
+      tags_set    — the tag[N] rating flags api_userrating.php echoed back
       session     — requests.Session with PHP cookie (for notifications scraping)
     Raises ValueError on failure.
 
@@ -140,6 +150,20 @@ def ib_fetch_submission_ids(
     server falls back to guest-level General-only content filtering.
     Returns a flat list of submission IDs.
     """
+    # An unscoped search is NOT a harmless empty search: api_search.php ignores a
+    # blank username/favs_user_id and matches the whole site (18000 results, 180
+    # pages of other people's submissions). ib_lookup_user_id returns "" when it
+    # can't resolve a name, and that "" used to be passed straight through. Today
+    # it happens to come back empty because orderby=fav_datetime rejects a blank
+    # favs_user_id — but that is luck, not a guard, so refuse it outright.
+    if mode == "gallery" and not (username or "").strip():
+        raise ValueError("Inkbunny gallery scan needs a username.")
+    if mode != "gallery" and not (user_id or "").strip():
+        raise ValueError(
+            f"Inkbunny favourites scan needs a numeric user_id"
+            f"{f' — could not resolve {username!r}' if username else ''}."
+        )
+
     all_ids: list[str] = []
     page = 1
 
@@ -202,10 +226,12 @@ def ib_fetch_submission_ids(
             f"  |  total collected: {len(all_ids)}"
         )
 
-        if page >= int(data.get("pages_count", "1")):
+        if page >= _int_or(data.get("pages_count"), 1):
             break
         page += 1
         time.sleep(0.5)
+    else:
+        log_fn(f"  Stopped at the {max_pages}-page limit — raise 'Max pages' for more.")
 
     return all_ids
 
@@ -269,98 +295,12 @@ def ib_fetch_unread_submission_ids(
             f"  |  total collected: {len(all_ids)}"
         )
 
-        if page >= int(data.get("pages_count", "1")):
+        if page >= _int_or(data.get("pages_count"), 1):
             break
         page += 1
         time.sleep(0.5)
-
-    return all_ids
-
-
-def ib_fetch_favourite_ids(
-    session: "requests.Session",
-    user_id: str,
-    max_pages: int,
-    log_fn=print,
-    cancel_fn=None,
-) -> list[str]:
-    """
-    Scrape the Inkbunny favourites page using the same endpoint the web browser
-    uses: /submissionsviewall.php?mode=userfavs&user_id=X&orderby=fav_datetime.
-    This guarantees the results and ordering match exactly what you see in the
-    browser.  user_id is the numeric ID returned by ib_login().
-    """
-    all_ids: list[str] = []
-    seen: set[str] = set()
-    rid: str | None = None
-
-    for page_num in range(1, max_pages + 1):
-        if cancel_fn and cancel_fn():
-            break
-
-        params: dict = {
-            "mode":    "userfavs",
-            "user_id": user_id,
-            "page":    page_num,
-            "orderby": "fav_datetime",
-        }
-        if rid:
-            params["rid"] = rid
-
-        log_fn(
-            f"[IB] Favourites — user_id={user_id}  page={page_num}"
-            f"  orderby=fav_datetime"
-            + (f"  rid={rid}" if rid else "")
-        )
-
-        r = session.get(f"{IB_API}/submissionsviewall.php", params=params, timeout=20)
-        r.raise_for_status()
-
-        if rid is None:
-            m = re.search(r"[?&]rid=([a-f0-9]+)", r.url)
-            if m:
-                rid = m.group(1)
-                log_fn(f"  Snapshot token (rid): {rid}")
-
-        soup = BeautifulSoup(r.text, "lxml")
-        log_fn(f"  Final URL: {r.url}")
-
-        ids: list[str] = []
-        # Only collect <a> tags that contain an <img> child.
-        # On the IB favourites page, thumbnail links always wrap an <img>.
-        # Header notification links, sidebar links, and title-text links do NOT
-        # have <img> children — filtering by img presence removes them.
-        for a in soup.find_all("a", href=re.compile(r"^/s/\d+")):
-            if not a.find("img"):
-                continue
-            m = re.match(r"/s/(\d+)", a["href"])
-            if m:
-                sub_id = m.group(1)
-                if sub_id not in seen:
-                    seen.add(sub_id)
-                    ids.append(sub_id)
-
-        if not ids:
-            all_links = soup.find_all("a", href=re.compile(r"^/s/\d+"))
-            if all_links:
-                log_fn(
-                    f"  No thumbnail links on page {page_num}"
-                    f" ({len(all_links)} text-only /s/ links found — no <img> wrappers)."
-                )
-            else:
-                log_fn(f"  No favourites on page {page_num} — done.")
-            break
-
-        all_ids.extend(ids)
-        log_fn(
-            f"  Page {page_num}: {len(ids)} favourites"
-            f"  |  total collected: {len(all_ids)}"
-            f"  |  first IDs: {', '.join(ids[:5])}"
-        )
-
-        if not soup.find("a", string=re.compile(r"next", re.I)):
-            break
-        time.sleep(random.uniform(1.0, 2.0))
+    else:
+        log_fn(f"  Stopped at the {max_pages}-page limit — raise 'Max pages' for more.")
 
     return all_ids
 
@@ -452,6 +392,10 @@ def download_ib_files(
     total       = len(file_infos)
     counter     = {"done": 0, "ok": 0, "bytes": 0}
     ok_sub_ids: set[str] = set()
+    # A submission can hold several files. If any one of them fails, the
+    # submission must NOT be reported as done — the caller marks done_ids as read
+    # on Inkbunny, which would retire the notification with a file still missing.
+    failed_sub_ids: set[str] = set()
     lock        = threading.Lock()
 
     if progress_fn:
@@ -467,15 +411,20 @@ def download_ib_files(
             title  = info.get("title", sub_id)
             uname  = info.get("username", "")
 
+            url_ext = url.split("?")[0].rsplit(".", 1)[-1][:10].lower()
             if orig:
-                fname = f"{sub_id}_{sanitize_filename(orig)}"
+                stem, dot, ext = orig.rpartition(".")
+                if not dot:
+                    stem, ext = orig, (url_ext or "bin")
             else:
-                raw_ext = url.rsplit(".", 1)[-1].split("?")[0][:10].lower()
-                ext     = raw_ext if raw_ext else "bin"
-                fname   = f"{sub_id}_{sanitize_filename(title)[:80]}.{ext}"
+                stem, ext = title, (url_ext or "bin")
 
-            fname     = fname[:200]
-            ext_check = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            # Truncate the stem, never the extension — the old blanket fname[:200]
+            # could cut the suffix off a long name, which then skipped the video/
+            # sub-folder, skipped the image preview, and left the file suffixless.
+            ext       = ext.lower()
+            fname     = f"{sub_id}_{sanitize_filename(stem)}"[:190] + f".{ext}"
+            ext_check = ext
             dest_dir  = os.path.join(output_dir, "video") if ext_check in VIDEO_EXTENSIONS else output_dir
             fpath     = os.path.join(dest_dir, fname)
 
@@ -500,6 +449,8 @@ def download_ib_files(
                     preview_fn(fpath)
         except Exception as exc:
             error_fn(f"[IB {info.get('submission_id', '?')}] {exc}")
+            with lock:
+                failed_sub_ids.add(info.get("submission_id", ""))
 
         with lock:
             counter["done"] += 1
@@ -517,7 +468,11 @@ def download_ib_files(
                 break
             fut.result()
 
-    return {"images": counter["ok"], "bytes": counter["bytes"], "done_ids": list(ok_sub_ids)}
+    return {
+        "images":   counter["ok"],
+        "bytes":    counter["bytes"],
+        "done_ids": sorted(ok_sub_ids - failed_sub_ids),
+    }
 
 
 def ib_mark_submissions_read(
