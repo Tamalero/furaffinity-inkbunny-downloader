@@ -294,15 +294,35 @@ def _fa_parse_page(session: "requests.Session", url: str) -> tuple[list[str], st
                 seen.add(m.group(1))
                 ids.append(m.group(1))
 
-    # Locate the "Next" button / link
-    next_url: str | None = None
+    return ids, _fa_next_page_url(soup, url)
+
+
+def _fa_next_page_url(soup: "BeautifulSoup", current_url: str) -> str | None:
+    """
+    Find the "Next page" target on a gallery/favourites listing.
+
+    FA renders gallery paging as <form action="/gallery/<user>/2/"><button>Next</button></form>
+    — there is no <a href> to follow, so the old anchor-text scan always came up
+    empty and every scan stopped after page 1. The anchor form is kept as a
+    fallback for the classic layout.
+    """
+    for btn in soup.find_all("button"):
+        # "Prev" sits in an identical form, so match the label exactly.
+        if btn.get_text(strip=True).lower() not in ("next", "next »", "»"):
+            continue
+        form = btn.find_parent("form")
+        href = form.get("action") if form else None
+        if href:
+            nxt = (FA_BASE + href) if href.startswith("/") else href
+            return None if nxt == current_url else nxt
+
     for a in soup.find_all("a", href=True):
         if a.get_text(strip=True).lower() in ("next", "»", ">"):
             href = a["href"]
-            next_url = (FA_BASE + href) if href.startswith("/") else href
-            break
+            nxt  = (FA_BASE + href) if href.startswith("/") else href
+            return None if nxt == current_url else nxt
 
-    return ids, next_url
+    return None
 
 
 def fa_fetch_submission_ids(
@@ -316,18 +336,27 @@ def fa_fetch_submission_ids(
     base_path = "favorites" if mode == "favourites" else "gallery"
     next_url: str | None = f"{FA_BASE}/{base_path}/{username}/"
     all_ids: list[str] = []
+    seen: set[str] = set()
 
     for page_num in range(1, max_pages + 1):
         if (cancel_fn and cancel_fn()) or not next_url:
             break
         log_fn(f"Scanning {mode} page {page_num}…")
         ids, next_url = _fa_parse_page(session, next_url)
+        # Dedupe across pages: if paging ever circles back, a repeated page
+        # yields nothing new and ends the scan instead of looping to max_pages.
+        ids = [i for i in ids if i not in seen]
         if not ids:
-            log_fn(f"No submissions found on page {page_num} — stopping.")
+            log_fn(f"No new submissions found on page {page_num} — stopping.")
+            next_url = None
             break
+        seen.update(ids)
         all_ids.extend(ids)
         log_fn(f"  Page {page_num}: {len(ids)} submissions (total: {len(all_ids)})")
         time.sleep(random.uniform(1.0, 2.5))
+
+    if next_url:
+        log_fn(f"Stopped at the {max_pages}-page limit — raise 'Max pages' for more.")
 
     return all_ids
 
@@ -362,18 +391,31 @@ def fa_fetch_notification_ids(
         ]
         if not ids:
             log_fn(f"No new submission notifications on page {page_num} — stopping.")
+            next_url = None
             break
         seen.update(ids)
         all_ids.extend(ids)
         log_fn(f"  Page {page_num}: {len(ids)} notifications (total: {len(all_ids)})")
 
-        # Inbox 'Next' link is <a class="button standard more" href="/msg/submissions/new~ID@48/">.
+        # Paging buttons are <a class="button standard more…" href="/msg/submissions/old~ID@48/">,
+        # but the class differs by page: page 1 has a lone "Next 48" (class 'more'),
+        # while every page after it has BOTH buttons at class 'more-half' — so a
+        # match on 'more' alone found nothing from page 2 on and every scan stopped
+        # at 96 items, whatever 'Max pages' said. 'prev' must stay excluded: it is
+        # first in document order, and following it walks the inbox backwards.
         next_url = None
-        more = soup.find("a", class_="more", href=True)
-        if more:
-            href = more["href"]
-            next_url = (FA_BASE + href) if href.startswith("/") else href
+        for a in soup.find_all("a", href=True):
+            classes = a.get("class") or []
+            if "prev" in classes:
+                continue
+            if "more" in classes or "more-half" in classes:
+                href     = a["href"]
+                next_url = (FA_BASE + href) if href.startswith("/") else href
+                break
         time.sleep(random.uniform(1.0, 2.0))
+
+    if next_url:
+        log_fn(f"Stopped at the {max_pages}-page limit — raise 'Max pages' for more.")
 
     return all_ids
 
