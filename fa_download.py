@@ -457,6 +457,78 @@ def fa_clear_notifications(
     return cleared
 
 
+# FA's scaled preview lives on t.furaffinity.net and carries an @<width>- marker
+# (e.g. //t.furaffinity.net/65446883@600-1782257473.jpg). Full files live on
+# d*.furaffinity.net under /art/… and never contain "@".
+_FA_PREVIEW_RE = re.compile(r"//t\d*\.furaffinity\.net/|@\d{2,4}-", re.I)
+
+
+def _fa_file_url(soup: "BeautifulSoup", submission_id: str) -> str:
+    """
+    Resolve the URL of a submission's actual file.
+
+    Ordered by how much each source can be trusted, because picking wrong is
+    silent: a preview is a perfectly valid image that downloads without error —
+    it just isn't the submission. Video and Flash pages are where this bites, as
+    the player markup sits alongside a poster/preview image.
+
+    Raises ValueError if only a scaled preview could be found, rather than
+    quietly saving a thumbnail in place of the real file.
+    """
+    def usable(url: str) -> str:
+        url = (url or "").strip()
+        return "" if not url or _FA_PREVIEW_RE.search(url) else url
+
+    saw_preview = False
+
+    def note(url: str) -> str:
+        nonlocal saw_preview
+        if url and _FA_PREVIEW_RE.search(url):
+            saw_preview = True
+        return usable(url)
+
+    # 1. FA's own Download button — authoritative for every submission type.
+    #    Matched on the full label and on the /download/ path: a.string is None
+    #    the moment FA wraps the label in a <span>, which is how the old
+    #    string="download" match could miss the button entirely.
+    for a in soup.find_all("a", href=True):
+        label = a.get_text(" ", strip=True).lower()
+        if "download" in label or "/download/" in a["href"].lower():
+            if note(a["href"]):
+                return a["href"]
+
+    # 2. The embedded player: <video>/<source> for video, <object>/<embed> for
+    #    Flash. These carry the real media when there is no download link.
+    for tag in soup.find_all(["video", "source", "object", "embed"]):
+        for attr in ("src", "data"):
+            if note(tag.get(attr, "")):
+                return tag[attr]
+
+    # 3. Any other link to the full-file CDN.
+    for a in soup.find_all("a", href=re.compile(r"//d\d*\.furaffinity\.net")):
+        if note(a["href"]):
+            return a["href"]
+
+    # 4. The inline image, full view FIRST — FA puts the scaled preview in src on
+    #    some layouts and keeps the real file in data-fullview-src.
+    for img in (
+        soup.find("img", id="submissionImg"),
+        soup.find("img", class_=re.compile(r"submission-image")),
+    ):
+        if not img:
+            continue
+        for attr in ("data-fullview-src", "src"):
+            if note(img.get(attr, "")):
+                return img[attr]
+
+    if saw_preview:
+        raise ValueError(
+            f"Only a scaled preview was found for submission {submission_id} — "
+            f"refusing to save it in place of the real file."
+        )
+    raise ValueError(f"No download URL for submission {submission_id}")
+
+
 def fa_get_download_info(
     session: "requests.Session",
     submission_id: str,
@@ -505,36 +577,7 @@ def fa_get_download_info(
         if a_el:
             artist = a_el["href"].strip("/").split("/")[-1]
 
-    # Download URL — prefer FA CDN links (//d*.furaffinity.net/…)
-    dl_url = ""
-    for a in soup.find_all("a", href=re.compile(r"//d\d*\.furaffinity\.net")):
-        dl_url = a["href"]
-        break
-    if not dl_url:
-        for a in soup.find_all("a", string=re.compile(r"\bdownload\b", re.I)):
-            href = a.get("href", "")
-            if href:
-                dl_url = href
-                break
-    if not dl_url:
-        # Video / Flash submissions: check <video src>, <source src>, or <a href> with
-        # a media extension — covers FA's HTML5 player where no separate download link exists.
-        for tag in soup.find_all(["video", "source"], src=True):
-            src = tag["src"]
-            if src:
-                dl_url = src
-                break
-    if not dl_url:
-        for img in (
-            soup.find("img", id="submissionImg"),
-            soup.find("img", class_=re.compile(r"submission-image")),
-        ):
-            if img and img.get("src"):
-                dl_url = img["src"]
-                break
-
-    if not dl_url:
-        raise ValueError(f"No download URL for submission {submission_id}")
+    dl_url = _fa_file_url(soup, submission_id)
     if dl_url.startswith("//"):
         dl_url = "https:" + dl_url
 
