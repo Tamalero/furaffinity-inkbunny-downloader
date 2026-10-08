@@ -1,6 +1,6 @@
 # FA & Inkbunny Downloader
 
-A desktop application for downloading galleries, favourites, and submission notifications from **FurAffinity** and **Inkbunny**. It runs on Linux and is distributed as a self-contained AppImage — no Python or system dependencies required.
+A desktop application for downloading galleries, favourites, and submission notifications from **FurAffinity**, **Inkbunny**, **Weasyl** and **SoFurry**. It runs on Linux and is distributed as a self-contained AppImage — no Python or system dependencies required.
 
 ---
 
@@ -10,9 +10,11 @@ A desktop application for downloading galleries, favourites, and submission noti
 2. [First Launch](#first-launch)
 3. [Configuring FurAffinity](#configuring-furaffinity)
 4. [Configuring Inkbunny](#configuring-inkbunny)
-5. [Download Options](#download-options)
-6. [Output Folder](#output-folder)
-7. [Troubleshooting — FurAffinity & Cloudflare](#troubleshooting--furaffinity--cloudflare)
+5. [Configuring Weasyl](#configuring-weasyl)
+6. [Configuring SoFurry](#configuring-sofurry)
+7. [Download Options](#download-options)
+8. [Output Folder](#output-folder)
+9. [Troubleshooting — FurAffinity & Cloudflare](#troubleshooting--furaffinity--cloudflare)
 
 ---
 
@@ -123,6 +125,63 @@ When using **Submission Notifications** mode, enabling **Clear notifications aft
 
 ---
 
+## Configuring Weasyl
+
+### Credentials
+
+Select **Weasyl** from the Site dropdown and enter your Weasyl **username** and **password**. No browser window opens. After the first login the session is remembered, so later runs don't sign in again.
+
+> **Two-factor authentication** is not supported. If your Weasyl account has 2FA turned on, the login will stop with a message saying so.
+
+> **Content ratings and filters:** the app downloads what your Weasyl account can see. That means your account's maximum rating setting applies, and so do your **blocked tags**: anything they hide on the website is skipped here too. Uncheck **Include adult content** to limit a run to General-rated work.
+
+### Download Modes
+
+| Mode | What it downloads |
+|---|---|
+| **User Gallery** | All submissions in a specified artist's gallery. The **Target Username** field is required. |
+| **User Favourites** | All submissions favourited by a specified user. Leave Target Username blank to use your own account. |
+| **Submission Notifications** | New submissions from artists you watch (your Weasyl submission inbox). |
+
+Pictures, characters and audio files are downloaded. Writing (Literary) is skipped, as are submissions with only an embedded video or player and no file to download.
+
+### Clear Notifications (Weasyl)
+
+When using **Submission Notifications** mode, enabling **Clear notifications after download** removes each downloaded submission from your Weasyl inbox. As with the other sites, only submissions that were successfully saved are removed.
+
+---
+
+## Configuring SoFurry
+
+### Credentials
+
+Select **SoFurry** from the Site dropdown and enter your SoFurry **email address** (not your username) and **password**. No browser window opens.
+
+SoFurry sends you a "New login" notification every time an app signs in, so the session is remembered after the first run and reused for later ones.
+
+> **Two-factor authentication** is not supported.
+
+> **Content ratings:** the app downloads what your SoFurry account can see. Uncheck **Include adult content** to switch the run to SoFurry's SFW mode.
+
+### Download Modes
+
+| Mode | What it downloads |
+|---|---|
+| **User Gallery** | All submissions in a specified artist's gallery. The **Target Username** field is required; use the name shown in their profile address (`sofurry.com/u/<name>`). |
+| **User Favourites** | All submissions a user has liked. Leave Target Username blank to use your own account. |
+| **Submission Notifications** | Your unread "new upload" notifications from artists you follow. |
+| **Following Feed** | The newest submissions from artists you follow — the **Submissions** tab of your SoFurry feed. Set **Max Submissions** to choose how many (for example the latest 50). SoFurry's feed goes back at most 10,000 submissions. |
+
+Artwork, photos, 3D work and music are downloaded. A submission with several pictures is saved as separate numbered files (`…_01.png`, `…_02.png`, …). Writing is skipped. Submissions whose artist has turned off downloads are skipped too: SoFurry only offers a reduced-quality copy of those, and the app never saves a reduced copy in place of the original.
+
+### Clear Notifications (SoFurry)
+
+When using **Submission Notifications** mode, enabling **Clear notifications after download** marks each downloaded submission's notification as read. Only submissions that were successfully saved are marked.
+
+SoFurry has no way to delete notifications, so read ones stay in your notification list on the site, shown as read. The app only downloads unread ones, so they are not downloaded again.
+
+---
+
 ## Download Options
 
 ### Target Username
@@ -131,7 +190,11 @@ Used in **User Gallery** and **User Favourites** modes to specify whose content 
 
 ### Max Pages
 
-Controls how many gallery/inbox pages the app scans before stopping. Each page typically contains up to 48–100 submissions depending on the site. Default is **25 pages**. Increase this to retrieve larger archives (up to 500 pages).
+Controls how many gallery/inbox pages the app scans before stopping. Each page holds 48 (FurAffinity, SoFurry galleries and favourites), 50 (SoFurry notifications), 60 (Weasyl favourites) or 100 (Inkbunny, Weasyl galleries and notifications, SoFurry feed) submissions. Default is **25 pages**. Increase this to retrieve larger archives (up to 500 pages).
+
+### Max Submissions
+
+**Weasyl and SoFurry only.** Stops after this many submissions, newest first. Use it when you want "the latest 20" rather than a number of pages; it is the natural way to use SoFurry's **Following Feed**. FurAffinity and Inkbunny use Max Pages alone, and the field is greyed out for them. **No limit** (0) is the default. When a limit is set, the app only scans as many pages as it needs to reach it, and Max Pages still applies on top. With **Clear notifications after download**, only the submissions actually downloaded are cleared; the rest stay in your inbox for the next run.
 
 ### Concurrent Downloads
 
@@ -158,12 +221,22 @@ Files are saved to sub-folders inside the chosen output directory:
 ~/Pictures/FAIBDownload/
 ├── FurAffinity/
 │   └── 12345678_artistname_original_filename.png
-└── Inkbunny/
-    └── 9876543_original_filename.jpg
+├── Inkbunny/
+│   └── 9876543_original_filename.jpg
+├── Weasyl/
+│   └── 1234567_artistname-submission-title.jpg
+└── SoFurry/
+    ├── AbCd1234_Submission Title_artistname.png
+    └── EfGh5678_Submission Title_artistname_01.png
 ```
 
-Both sites name files `<submission ID>_…_<original filename>`; the FurAffinity
-name also carries the artist's account name.
+All sites start the file name with the submission ID; the FurAffinity name also
+carries the artist's account name. Weasyl does not keep the uploader's original
+file name, so its files are named after the artist and the submission title.
+Weasyl characters start with `c` (`c12345_…`) so they never clash with a
+submission of the same number. SoFurry submission IDs are short letter codes
+rather than numbers, and its file names use the name SoFurry gives the download.
+Multi-picture submissions get `_01`, `_02`, … on the end.
 
 You can change the output folder at any time by clicking **Browse…** next to the Output Folder field. The selection is remembered between sessions.
 

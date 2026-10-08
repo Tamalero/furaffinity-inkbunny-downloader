@@ -18,6 +18,12 @@ from PyQt6.QtGui import QFont, QPixmap, QTextCursor, QTextCharFormat, QColor
 import common
 import fa_download
 import ib_download
+import wz_download
+import sf_download
+
+
+# Sites whose Download Options include "Max submissions".
+_LIMIT_SITES = ("Weasyl", "SoFurry")
 
 
 # ── Background download worker ─────────────────────────────────────────────────
@@ -49,6 +55,25 @@ class DownloadWorker(QThread):
             print(msg, file=sys.stderr, flush=True)
         self.error.emit(msg)
 
+    def _pages(self, cfg: dict, per_page: int) -> int:
+        """Max pages, lowered to just enough pages to reach Max submissions so a
+        small limit doesn't scan the whole inbox first."""
+        limit = cfg.get("limit", 0)
+        if not limit:
+            return cfg["pages"]
+        pages = min(cfg["pages"], -(-limit // per_page))
+        if pages < cfg["pages"]:
+            self._log(f"Max submissions is {limit} — scanning {pages} page(s) of up to {per_page}.")
+        return pages
+
+    def _cap(self, cfg: dict, items: list) -> list:
+        """Keep the first Max-submissions items (every mode lists newest first)."""
+        limit = cfg.get("limit", 0)
+        if limit and len(items) > limit:
+            self._log(f"Limiting to the first {limit} of {len(items)} submissions (Max submissions).")
+            return items[:limit]
+        return items
+
     def run(self):
         cfg  = self.cfg
         site = cfg["site"]
@@ -57,6 +82,10 @@ class DownloadWorker(QThread):
 
             if site == "FurAffinity":
                 self._run_fa(cfg)
+            elif site == "Weasyl":
+                self._run_wz(cfg)
+            elif site == "SoFurry":
+                self._run_sf(cfg)
             else:
                 self._run_ib(cfg)
 
@@ -272,6 +301,136 @@ class DownloadWorker(QThread):
 
         self._finish(stats)
 
+    # ── Weasyl flow ────────────────────────────────────────────────────────────
+
+    def _run_wz(self, cfg: dict):
+        allow_adult = cfg.get("adult_content", True)
+        session, login = wz_download.wz_login(
+            cfg["username"], cfg["password"], allow_adult=allow_adult, log_fn=self._log
+        )
+        rating_note = "account rating settings" if allow_adult else "General-only (adult content disabled)"
+        self._log(f"Login successful — login: {login}  ({rating_note})")
+
+        mode_text = cfg["mode"]
+        out_dir   = os.path.join(cfg["output"], "Weasyl")
+        common_kw = dict(log_fn=self._log, cancel_fn=lambda: self._stop)
+
+        if mode_text == "Submission Notifications":
+            self._log("Fetching submission notifications…")
+            items = wz_download.wz_fetch_notifications(
+                session, max_pages=self._pages(cfg, 100), **common_kw)
+        elif mode_text == "User Favourites":
+            target = cfg["target"].strip() or login
+            self._log(f"Fetching favourites of '{target}'…")
+            items = wz_download.wz_fetch_favourites(
+                session, target, max_pages=self._pages(cfg, 60), **common_kw)
+        else:  # User Gallery
+            target = cfg["target"].strip() or login
+            self._log(f"Fetching gallery of '{target}'…")
+            items = wz_download.wz_fetch_gallery(
+                session, target, max_pages=self._pages(cfg, 100), **common_kw)
+
+        if not items:
+            self.done.emit(False, "No submissions found.")
+            return
+
+        items = self._cap(cfg, items)
+        self._log(f"Found {len(items)} submissions. Starting download…")
+
+        stats = wz_download.download_wz_submissions(
+            session, items, out_dir,
+            log_fn=self._log,
+            error_fn=self._err,
+            cancel_fn=lambda: self._stop,
+            progress_fn=lambda d, t: self.progress.emit(d, t),
+            file_progress_fn=lambda fn, d, t: self.file_progress.emit(fn, d, t),
+            preview_fn=self.preview.emit,
+            delay_min=cfg["delay_min"],
+            delay_max=cfg["delay_max"],
+            max_workers=cfg["workers"],
+        )
+
+        # Clear only inbox entries whose file actually landed on disk.
+        if cfg.get("clear_notifications") and not self._stop:
+            done = set(stats.get("done_ids", []))
+            welcomeids = [w for it in items if it["key"] in done for w in it["welcomeids"]]
+            if welcomeids:
+                self._log(f"Clearing {len(welcomeids)} downloaded notifications…")
+                wz_download.wz_clear_notifications(
+                    session, welcomeids,
+                    log_fn=self._log,
+                    cancel_fn=lambda: self._stop,
+                )
+            else:
+                self._log("No successfully-downloaded notifications to clear.")
+
+        self._finish(stats)
+
+    # ── SoFurry flow ───────────────────────────────────────────────────────────
+
+    def _run_sf(self, cfg: dict):
+        allow_adult = cfg.get("adult_content", True)
+        session, handle = sf_download.sf_login(
+            cfg["username"], cfg["password"], allow_adult=allow_adult, log_fn=self._log
+        )
+        rating_note = "account rating settings" if allow_adult else "General-only (adult content disabled)"
+        self._log(f"Login successful — handle: {handle}  ({rating_note})")
+
+        mode_text = cfg["mode"]
+        out_dir   = os.path.join(cfg["output"], "SoFurry")
+        common_kw = dict(log_fn=self._log, cancel_fn=lambda: self._stop)
+
+        if mode_text == "Submission Notifications":
+            self._log("Fetching new-upload notifications…")
+            items = sf_download.sf_fetch_notifications(
+                session, max_pages=self._pages(cfg, 50), **common_kw)
+        elif mode_text == "Following Feed":
+            self._log("Fetching submissions from artists you follow…")
+            items = sf_download.sf_fetch_feed(
+                session, max_pages=self._pages(cfg, 100), **common_kw)
+        else:
+            target = cfg["target"].strip() or handle
+            tab    = "likes" if mode_text == "User Favourites" else "gallery"
+            self._log(f"Fetching {'favourites' if tab == 'likes' else 'gallery'} of '{target}'…")
+            items = sf_download.sf_fetch_profile(
+                session, target, tab, max_pages=self._pages(cfg, 48), **common_kw)
+
+        if not items:
+            self.done.emit(False, "No submissions found.")
+            return
+
+        items = self._cap(cfg, items)
+        self._log(f"Found {len(items)} submissions. Starting download…")
+
+        stats = sf_download.download_sf_submissions(
+            session, items, out_dir,
+            log_fn=self._log,
+            error_fn=self._err,
+            cancel_fn=lambda: self._stop,
+            progress_fn=lambda d, t: self.progress.emit(d, t),
+            file_progress_fn=lambda fn, d, t: self.file_progress.emit(fn, d, t),
+            preview_fn=self.preview.emit,
+            delay_min=cfg["delay_min"],
+            delay_max=cfg["delay_max"],
+            max_workers=cfg["workers"],
+        )
+
+        # Mark read only the notifications whose submission actually landed on disk.
+        if cfg.get("clear_notifications") and not self._stop:
+            done = set(stats.get("done_ids", []))
+            notif_ids = [n for it in items if it["key"] in done for n in it["notif_ids"]]
+            if notif_ids:
+                self._log(f"Marking {len(notif_ids)} downloaded notifications as read…")
+                sf_download.sf_clear_notifications(
+                    session, notif_ids,
+                    log_fn=self._log,
+                    cancel_fn=lambda: self._stop,
+                )
+            else:
+                self._log("No successfully-downloaded notifications to mark as read.")
+
+        self._finish(stats)
+
     # ── Shared finish ──────────────────────────────────────────────────────────
 
     def _finish(self, stats: dict):
@@ -424,6 +583,10 @@ class MainWindow(QMainWindow):
             "Inkbunny: when checked, your account's content rating preferences are\n"
             "used (including adult/explicit art). Uncheck to restrict this download\n"
             "session to General-rated content only.\n\n"
+            "Weasyl: when checked, your account's maximum rating applies. Uncheck\n"
+            "to switch this session to Weasyl's SFW mode (General only).\n\n"
+            "SoFurry: when checked, your account's content settings apply. Uncheck\n"
+            "to switch this session to SoFurry's SFW mode.\n\n"
             "FurAffinity: adult content is controlled through your FA account settings\n"
             "and the browser session — this checkbox does not apply."
         )
@@ -439,6 +602,21 @@ class MainWindow(QMainWindow):
         self.sp_pages.setValue(25)
         self.sp_pages.setSuffix("  pages")
 
+        self.sp_limit = QSpinBox()
+        self.sp_limit.setRange(0, 100000)
+        self.sp_limit.setValue(0)
+        self.sp_limit.setSpecialValueText("No limit")
+        self.sp_limit.setSuffix("  submissions")
+        self.sp_limit.setToolTip(
+            "Weasyl and SoFurry only. Stop after this many submissions\n"
+            "(newest first).\n"
+            "0 = no limit.\n"
+            "Max Pages still applies; the scan only fetches as many pages as\n"
+            "it needs to reach this number."
+        )
+        # _on_site_changed first runs before this widget exists, so set it here too.
+        self.sp_limit.setEnabled(self.cb_site.currentText() in _LIMIT_SITES)
+
         self.sp_workers = QSpinBox()
         self.sp_workers.setRange(1, 5)
         self.sp_workers.setValue(2)
@@ -451,6 +629,7 @@ class MainWindow(QMainWindow):
         f.addRow("Mode:",                 self.cb_mode)
         f.addRow("Target Username:",      self.le_target)
         f.addRow("Max Pages:",            self.sp_pages)
+        f.addRow("Max Submissions:",      self.sp_limit)
         f.addRow("Concurrent Downloads:", self.sp_workers)
         f.addRow("Post Delay:",           self._build_delay_widget())
         f.addRow("",                      self.chk_clear_notif)
@@ -459,7 +638,10 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _modes_for_site(site: str) -> list[str]:
-        return ["User Gallery", "User Favourites", "Submission Notifications"]
+        modes = ["User Gallery", "User Favourites", "Submission Notifications"]
+        if site == "SoFurry":
+            modes.append("Following Feed")
+        return modes
 
     def _output_group(self) -> QGroupBox:
         g = QGroupBox("Output Folder")
@@ -696,13 +878,25 @@ class MainWindow(QMainWindow):
             "Inkbunny": (
                 "Inkbunny has a native API — login is fast and reliable."
             ),
+            "Weasyl": (
+                "Weasyl uses your normal username and password (2FA accounts are not "
+                "supported). Your account's maximum rating and blocked tags apply."
+            ),
+            "SoFurry": (
+                "SoFurry signs in with your EMAIL address, not your username. "
+                "Your account's content settings apply."
+            ),
         }
         self.lbl_site_hint.setText(hints.get(site, ""))
 
-        # Adult-content checkbox only applies to Inkbunny (IB uses ratingsmask).
-        # FA adult content is set in the FA account / browser session — no API override.
+        # Adult-content checkbox applies to Inkbunny (ratingsmask) and Weasyl (SFW
+        # cookie). FA adult content is set in the FA account / browser session.
         if hasattr(self, "chk_adult_content"):
-            self.chk_adult_content.setEnabled(site == "Inkbunny")
+            self.chk_adult_content.setEnabled(site in ("Inkbunny", "Weasyl", "SoFurry"))
+        # Max submissions applies to Weasyl and SoFurry; FA and Inkbunny keep
+        # plain Max Pages.
+        if hasattr(self, "sp_limit"):
+            self.sp_limit.setEnabled(site in _LIMIT_SITES)
 
         # Persist the previous site's typed credentials before swapping them out,
         # so FA and Inkbunny each keep their own username+password as you switch.
@@ -724,6 +918,9 @@ class MainWindow(QMainWindow):
             self.cb_mode.blockSignals(False)
             self._on_mode_changed(self.cb_mode.currentText())
 
+        # SoFurry signs in with an email address rather than a username.
+        self.le_username.setPlaceholderText("Email address" if site == "SoFurry" else "Username")
+
         # Load credentials for the newly selected site
         cfg = common.load_config()
         username, password = common.get_credentials(cfg, site)
@@ -733,7 +930,7 @@ class MainWindow(QMainWindow):
     def _on_mode_changed(self, mode: str):
         # Stash the target typed for the departing mode, then restore the one
         # previously used for the arriving mode.  Without this, a Gallery target
-        # (e.g. "MishaJeans") would bleed into Favourites mode and download that
+        # (e.g. "someartist") would bleed into Favourites mode and download that
         # artist's favourites instead of the logged-in user's own.
         if self._prev_mode is not None:
             self._target_per_mode[self._prev_mode] = self.le_target.text()
@@ -741,10 +938,13 @@ class MainWindow(QMainWindow):
         self.le_target.setText(self._target_per_mode.get(mode, ""))
 
         is_notif = mode == "Submission Notifications"
-        self.le_target.setEnabled(not is_notif)
+        is_feed  = mode == "Following Feed"
+        self.le_target.setEnabled(not (is_notif or is_feed))
         self.chk_clear_notif.setEnabled(is_notif)
         if is_notif:
             self.le_target.setPlaceholderText("(not used — notifications come from your own inbox)")
+        elif is_feed:
+            self.le_target.setPlaceholderText("(not used — the feed shows artists you follow)")
         elif mode == "User Gallery":
             self.le_target.setPlaceholderText("Username whose gallery to download (required)")
         else:
@@ -803,6 +1003,11 @@ class MainWindow(QMainWindow):
                 self.sp_pages.setValue(int(lr["pages"]))
             except ValueError:
                 pass
+        if "limit" in lr:
+            try:
+                self.sp_limit.setValue(int(lr["limit"]))
+            except ValueError:
+                pass
         if "workers" in lr:
             try:
                 self.sp_workers.setValue(int(lr["workers"]))
@@ -835,6 +1040,7 @@ class MainWindow(QMainWindow):
             "mode":          self.cb_mode.currentText(),
             "target":        self.le_target.text().strip(),
             "pages":         str(self.sp_pages.value()),
+            "limit":         str(self.sp_limit.value()),
             "workers":       str(self.sp_workers.value()),
             "output":        self.le_output.text().strip(),
             "delay_type":    self.cb_delay_type.currentText(),
@@ -953,6 +1159,7 @@ class MainWindow(QMainWindow):
             "mode":      mode,
             "target":    target,
             "pages":     self.sp_pages.value(),
+            "limit":     self.sp_limit.value() if site in _LIMIT_SITES else 0,
             "workers":   self.sp_workers.value(),
             "output":    self.le_output.text().strip(),
             "delay_min": delay_min,

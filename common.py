@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 
-VERSION = "1.2.6"
+VERSION = "1.3.0"
 GITHUB_REPO = "Tamalero/furaffinity-inkbunny-downloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
@@ -18,7 +18,7 @@ CONFIG_FILE          = CONFIG_DIR / "config.ini"
 KEY_FILE             = CONFIG_DIR / "secret.key"
 DEFAULT_DOWNLOAD_DIR = str(Path.home() / "Pictures" / "FAIBDownload")
 
-SITES = ["FurAffinity", "Inkbunny"]
+SITES = ["FurAffinity", "Inkbunny", "Weasyl", "SoFurry"]
 
 IMAGE_EXTENSIONS = {
     "jpg", "jpeg", "png", "gif", "webp", "bmp",

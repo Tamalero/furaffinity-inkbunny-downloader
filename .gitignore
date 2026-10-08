@@ -17,6 +17,8 @@ FAIBDownload/
 # but gitignore them here as a safety net if the config path is ever changed)
 *.key
 fa_cookies.json
+wz_cookies.json
+sf_cookies.json
 config.ini
 
 # AppImage build artifacts
